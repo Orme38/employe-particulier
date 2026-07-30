@@ -95,9 +95,20 @@ function getTier(userId) {
 async function initDb() {
   SQL = await initSqlJs();
 
+  const SCHEMA_VERSION = 2;
+  const resetDb = () => { if (fs.existsSync(DB_PATH)) fs.unlinkSync(DB_PATH); };
+
   if (fs.existsSync(DB_PATH)) {
     const buf = fs.readFileSync(DB_PATH);
     db = new SQL.Database(buf);
+    db.run("PRAGMA foreign_keys=ON");
+    const ver = qOne("SELECT value FROM settings WHERE key = 'schema_version'");
+    if (!ver || parseInt(ver.value) < SCHEMA_VERSION) {
+      console.log('Schema outdated, resetting database...');
+      db.close();
+      resetDb();
+      db = new SQL.Database();
+    }
   } else {
     db = new SQL.Database();
   }
@@ -159,6 +170,7 @@ async function initDb() {
     UNIQUE(billing_month_label, family_name)
   )`);
   db.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
+  qRun("INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', '2')");
 }
 
 // ───── HELPERS ─────
