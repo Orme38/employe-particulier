@@ -261,13 +261,13 @@ app.get('/api/dashboard', (req, res) => {
   const summary = qOne(`SELECT
     COUNT(DISTINCT a.family_name) as families_count,
     COUNT(a.id) as days_count,
-    ROUND(SUM(a.total_hours), 2) as total_hours,
-    ROUND(SUM(a.amount), 2) as total_amount
+    COALESCE(ROUND(SUM(a.total_hours), 2), 0) as total_hours,
+    COALESCE(ROUND(SUM(a.amount), 2), 0) as total_amount
     FROM attendances a WHERE a.attendance_date LIKE ?`, [prefix + '%']) || { families_count: 0, days_count: 0, total_hours: 0, total_amount: 0 };
 
   const totalAllTime = qOne(`SELECT
     COUNT(DISTINCT a.family_name) as total_families,
-    ROUND(SUM(a.amount), 2) as total_earned
+    COALESCE(ROUND(SUM(a.amount), 2), 0) as total_earned
     FROM attendances a`) || { total_families: 0, total_earned: 0 };
 
   const recent = qAll("SELECT a.*, f.hourly_rate FROM attendances a LEFT JOIN families f ON a.family_id = f.id ORDER BY a.created_at DESC LIMIT 5");
