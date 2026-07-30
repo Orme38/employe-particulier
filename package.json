@@ -1,0 +1,31 @@
+{
+  "name": "employe-particulier",
+  "version": "1.0.0",
+  "description": "Application de suivi des heures travaillées et facturation pour employés de particulier",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "android": "npx cap sync android && npx cap open android",
+    "ios": "npx cap sync ios && npx cap open ios",
+    "build:android": "npx cap sync android && cd android && ./gradlew assembleDebug",
+    "build:ios": "npx cap sync ios && cd ios && xcodebuild -workspace App.xcworkspace -scheme App -sdk iphoneos -configuration Release",
+    "cap:sync": "npx cap sync"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/cli": "^8.4.2",
+    "@capacitor/core": "^8.4.2",
+    "@capacitor/device": "^8.0.3",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/ios": "^8.4.2",
+    "@capacitor/keyboard": "^8.0.5",
+    "@capacitor/local-notifications": "^8.2.1",
+    "@capacitor/network": "^8.0.1",
+    "@capacitor/push-notifications": "^8.1.2",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.3",
+    "express": "^4.21.0",
+    "sql.js": "^1.11.0"
+  }
+}
