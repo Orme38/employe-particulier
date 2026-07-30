@@ -291,7 +291,12 @@ app.get('/api/subscription/status', authMiddleware, (req, res) => {
 });
 
 app.get('/api/subscription/config', (req, res) => {
-  res.json({ publishableKey: STRIPE_PUBLISHABLE_KEY });
+  res.json({
+    publishableKey: STRIPE_PUBLISHABLE_KEY,
+    hasSecretKey: !!STRIPE_SECRET_KEY,
+    hasPriceId: !!STRIPE_PRICE_ID && STRIPE_PRICE_ID !== 'price_pro_monthly',
+    appUrl: APP_URL,
+  });
 });
 
 app.post('/api/subscription/create-checkout', authMiddleware, async (req, res) => {
@@ -310,13 +315,13 @@ app.post('/api/subscription/create-checkout', authMiddleware, async (req, res) =
       metadata: { user_id: String(req.user.id) },
       client_reference_id: String(req.user.id),
       customer_email: req.user.email,
-      success_url: `${APP_URL}/?checkout=success`,
-      cancel_url: `${APP_URL}/?checkout=canceled`,
+    success_url: (APP_URL || 'https://employe-particulier-production.up.railway.app') + '/?checkout=success',
+    cancel_url: (APP_URL || 'https://employe-particulier-production.up.railway.app') + '/?checkout=canceled',
     });
     res.json({ url: session.url, id: session.id });
   } catch (e) {
-    console.error('Stripe checkout error:', e.message);
-    res.status(500).json({ error: 'Erreur lors de la creation du paiement' });
+    console.error('Stripe checkout error:', e.message, e.stack);
+    res.status(500).json({ error: 'Erreur Stripe: ' + e.message });
   }
 });
 
