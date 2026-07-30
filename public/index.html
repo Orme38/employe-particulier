@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Employé de Particulier — Suivi & Facturation</title>
 <meta name="description" content="Suivi des heures travaillées et facturation mensuelle">
-<meta name="theme-color" content="#0071e3">
+<meta name="theme-color" content="#0071e3" id="theme-color">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Employé Particulier">
@@ -16,23 +16,34 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-<h1>Employé de Particulier</h1>
-<p class="subtitle" id="db-status">Connexion...</p>
-<nav>
-<button class="tab active" data-page="families">Employeurs</button>
-<button class="tab" data-page="attendances">Présences</button>
-<button class="tab" data-page="billing">Facturation</button>
-</nav>
-</header>
-<main>
-<div id="page-families" class="page active"></div>
-<div id="page-attendances" class="page"></div>
-<div id="page-billing" class="page"></div>
-</main>
+<div id="app">
+  <header id="main-header">
+    <div class="header-top">
+      <h1 id="app-title">Employé de Particulier</h1>
+      <div class="header-actions">
+        <button id="dark-toggle" class="icon-btn" aria-label="Mode sombre">🌙</button>
+        <button id="auth-btn" class="btn btn-outline btn-sm auth-btn">Connexion</button>
+      </div>
+    </div>
+    <p class="subtitle" id="db-status">Connexion...</p>
+    <nav id="main-nav">
+      <button class="tab active" data-page="dashboard">Accueil</button>
+      <button class="tab" data-page="families">Employeurs</button>
+      <button class="tab" data-page="attendances">Présences</button>
+      <button class="tab" data-page="billing">Facturation</button>
+    </nav>
+  </header>
+  <main>
+    <div id="page-dashboard" class="page active"></div>
+    <div id="page-families" class="page"></div>
+    <div id="page-attendances" class="page"></div>
+    <div id="page-billing" class="page"></div>
+    <div id="page-account" class="page"></div>
+  </main>
+</div>
 <div id="toast"></div>
 <div class="modal-overlay" id="modal-overlay">
-<div class="modal" id="modal-content"></div>
+  <div class="modal" id="modal-content"></div>
 </div>
 <script>
 if ('serviceWorker' in navigator) {
