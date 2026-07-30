@@ -75,18 +75,36 @@ function showProInfo() {
   const html = `<div class="text-center" style="padding:8px 0">
     <div style="font-size:48px;margin-bottom:12px">⭐</div>
     <h3>Employé de Particulier Pro</h3>
-    <p style="color:var(--text-secondary);margin:12px 0">Profitez de toutes les fonctionnalités sans limite.</p>
+    <p style="color:var(--text-secondary);margin:12px 0">Profitez de toutes les fonctionnalites sans limite.</p>
     <div style="text-align:left;margin:16px 0;padding:12px;background:var(--bg);border-radius:var(--radius-sm)">
-      <div style="display:flex;justify-content:space-between;padding:6px 0"><span>✅ Gratuit</span><span>2 employeurs · 10 présences/mois</span></div>
-      <div style="display:flex;justify-content:space-between;padding:6px 0"><span>⭐ Pro</span><span><strong>Illimité</strong></span></div>
+      <div style="display:flex;justify-content:space-between;padding:6px 0"><span>✅ Gratuit</span><span>2 employeurs · 10 presences/mois</span></div>
+      <div style="display:flex;justify-content:space-between;padding:6px 0"><span>⭐ Pro</span><span><strong>Illimite</strong></span></div>
     </div>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:8px">${authToken ? 'Mode demo - Contactez-nous pour activer' : 'Connectez-vous pour gérer votre abonnement'}</p>
-    ${authToken ? `<p style="font-size:13px;color:var(--muted)">Email : pro@employe-particulier.app</p>` : ''}
-    <div class="modal-actions" style="justify-content:center">
-      <button class="btn btn-outline" onclick="hideModal()">Fermer</button>
+    <p style="font-size:14px;font-weight:600;margin-bottom:12px">5€/mois · Paiement securise par Stripe</p>
+    <div id="pro-action-area">
+      <button class="btn btn-pro btn-block" onclick="startProCheckout()" id="pro-checkout-btn">
+        ${authToken ? 'Passer en Pro' : 'Connectez-vous d\'abord'}
+      </button>
+    </div>
+    <div class="modal-actions" style="justify-content:center;margin-top:12px">
+      <button class="btn btn-outline" onclick="hideModal()">Plus tard</button>
     </div>
   </div>`;
   showModal(html);
+}
+
+async function startProCheckout() {
+  if (!authToken) { hideModal(); showAuthModal(); return; }
+  const btn = document.getElementById('pro-checkout-btn');
+  btn.textContent = 'Redirection...'; btn.disabled = true;
+  try {
+    const res = await api('POST', '/api/subscription/create-checkout');
+    if (res.url) window.location.href = res.url;
+    else showToast('Erreur: pas d\'URL de paiement');
+  } catch (err) {
+    showToast('Erreur: ' + err.message);
+    btn.textContent = 'Passer en Pro'; btn.disabled = false;
+  }
 }
 
 // ───── AUTH ─────
