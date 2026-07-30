@@ -574,6 +574,66 @@ function onCafChange(familyName, value) {
   }, 400);
 }
 
+// ───── TUTORIAL ─────
+function showTutorial() {
+  const steps = [
+    {
+      icon: '👋',
+      title: 'Bienvenue sur votre espace !',
+      desc: 'Cette application vous permet de <strong>suivre vos heures travaillees</strong> et de <strong>calculer automatiquement vos gains</strong> du mois, que vous soyez aide-menagere, garde d\'enfants, jardinier ou tout autre employe de particulier.',
+    },
+    {
+      icon: '🏢',
+      title: '1. Ajoutez vos employeurs',
+      desc: 'Rendez-vous dans l\'onglet <strong>Employeurs</strong> (en haut) pour ajouter les personnes chez qui vous travaillez. Saisissez leur nom, le type de service et votre <strong>tarif horaire</strong>.',
+    },
+    {
+      icon: '⏰',
+      title: '2. Enregistrez vos presences',
+      desc: 'Dans l\'onglet <strong>Presences</strong>, saisissez la date et les horaires de chaque jour travaille. Le montant gagne se calcule automatiquement !',
+    },
+    {
+      icon: '📊',
+      title: '3. Consultez vos gains',
+      desc: 'L\'onglet <strong>Facturation</strong> vous donne le recapitulatif du mois : heures totales, montant brut, deductions et <strong>montant net a recevoir</strong>.',
+    },
+    {
+      icon: '🔐',
+      title: '4. Sauvegardez vos donnees',
+      desc: 'Creez un <strong>compte gratuit</strong> en cliquant sur "Connexion" en haut a droite. Vos donnees seront sauvegardees en ligne et accessibles depuis n\'importe ou !',
+    },
+  ];
+
+  let currentStep = 0;
+
+  function renderStep() {
+    const s = steps[currentStep];
+    const isFirst = currentStep === 0;
+    const isLast = currentStep === steps.length - 1;
+    const html = `<div class="text-center" style="padding:8px 0">
+      <div style="font-size:64px;margin-bottom:16px;animation:pulse 2s infinite">${s.icon}</div>
+      <h3 style="font-size:22px;margin-bottom:12px">${s.title}</h3>
+      <p style="color:var(--text-secondary);line-height:1.6;margin-bottom:20px;font-size:15px">${s.desc}</p>
+      <div style="display:flex;gap:6px;justify-content:center;margin-bottom:20px">
+        ${steps.map((_, i) => `<div style="width:${i === currentStep ? '24px' : '8px'};height:8px;border-radius:4px;background:${i === currentStep ? 'var(--primary)' : 'var(--border)'};transition:all 0.3s"></div>`).join('')}
+      </div>
+      <div class="modal-actions" style="justify-content:${isFirst ? 'flex-end' : 'space-between'}">
+        ${isFirst ? '' : `<button class="btn btn-outline" onclick="tutorialPrev()">Precedent</button>`}
+        ${isLast
+          ? `<button class="btn btn-primary" onclick="tutorialDone()">Commencer !</button>`
+          : `<button class="btn btn-primary" onclick="tutorialNext()">Suivant</button>`}
+      </div>
+    </div>`;
+    showModal(html);
+  }
+
+  window.tutorialNext = () => { if (currentStep < steps.length - 1) { currentStep++; renderStep(); } };
+  window.tutorialPrev = () => { if (currentStep > 0) { currentStep--; renderStep(); } };
+  window.tutorialDone = () => { hideModal(); localStorage.setItem('tutorial_done', '1'); };
+
+  renderStep();
+}
+
 // ───── NAVIGATION ─────
 async function navigateTo(page) {
   currentPage = page;
@@ -614,5 +674,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('db-status').textContent = 'Connecte';
   } catch { document.getElementById('db-status').textContent = 'Hors ligne (cache)'; }
   await checkAuth();
-  navigateTo('dashboard');
+  await navigateTo('dashboard');
+  if (!localStorage.getItem('tutorial_done')) {
+    setTimeout(showTutorial, 500);
+  }
 });
