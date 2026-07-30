@@ -403,13 +403,15 @@ app.get('/api/dashboard', (req, res) => {
 // ───── DATA EXPORT ─────
 app.get('/api/export/csv', authMiddleware, (req, res) => {
   try {
-    const rows = qAll(`SELECT a.attendance_date, a.family_name, a.service_type,
+    const rows = qAll(`SELECT a.attendance_date, a.family_name, f.service_type,
       a.arrival_time, a.departure_time, a.total_hours, a.amount, f.hourly_rate
       FROM attendances a LEFT JOIN families f ON a.family_id = f.id
       WHERE a.user_id = ? ORDER BY a.attendance_date DESC`, [req.user.id]);
     let csv = 'Date;Famille;Service;Arrivee;Depart;Heures;Taux/h;Montant\n';
     for (const r of rows) {
-      csv += `${r.attendance_date};${r.family_name};${r.service_type||''};${r.arrival_time};${r.departure_time};${(r.total_hours||0).toFixed(2)};${(r.hourly_rate||0).toFixed(2)};${(r.amount||0).toFixed(2)}\n`;
+      const svc = r.service_type || '';
+      const rt = r.hourly_rate || 0;
+      csv += `${r.attendance_date};${r.family_name};${svc};${r.arrival_time};${r.departure_time};${(r.total_hours||0).toFixed(2)};${(rt).toFixed(2)};${(r.amount||0).toFixed(2)}\n`;
     }
     res.setHeader('Content-Type', 'text/csv;charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment;filename=export.csv');
