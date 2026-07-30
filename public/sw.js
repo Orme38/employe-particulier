@@ -1,4 +1,4 @@
-const CACHE = 'employe-v1';
+const CACHE = 'employe-v2';
 const STATIC = [
   '/', '/index.html', '/app.js', '/style.css', '/manifest.json', '/icon.svg'
 ];
