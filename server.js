@@ -28,42 +28,6 @@ function saveDb() {
   fs.writeFileSync(DB_PATH, Buffer.from(db.export()));
 }
 
-// ───── EMBEDDED CSV ─────
-const CSV_FAMILIES = `id,family_name,service_type,hourly_rate,parent_email
-1,Dupont,Garde d'enfants,4.5,dupont@email.fr
-2,Martin,Garde d'enfants,5,martin@email.fr
-3,Dridi,Ménage,0,
-5,Risley,Jardinage,10,abd@gmail.com
-6,Akriche,,0,`;
-
-const CSV_ATTENDANCES = `id,attendance_date,family_name,arrival_time,departure_time,family_id
-1,2026-07-01,Dupont,08:00:00,17:30:00,1
-2,2026-07-02,Dupont,08:00:00,17:30:00,1
-3,2026-07-03,Dupont,08:00:00,17:30:00,1
-4,2026-07-06,Dupont,08:00:00,17:30:00,1
-5,2026-07-07,Dupont,08:00:00,17:30:00,1
-6,2026-07-01,Martin,08:30:00,16:30:00,2
-7,2026-07-02,Martin,08:30:00,16:30:00,2
-8,2026-07-03,Martin,08:30:00,16:30:00,2
-9,2026-07-29,Dridi,08:00:00,17:00:00,3
-11,2026-07-29,Akriche,08:00:00,17:00:00,6`;
-
-const CSV_CAF = `id,billing_month_label,family_name,caf_subsidy
-1,Juillet 2026,Dupont,90
-2,Juillet 2026,Martin,60`;
-
-function parseCSV(text) {
-  const lines = text.trim().split('\n');
-  if (lines.length < 2) return [];
-  const headers = lines[0].split(',').map(h => h.trim());
-  return lines.slice(1).map(line => {
-    const vals = line.split(',').map(v => v.trim());
-    const row = {};
-    headers.forEach((h, i) => { row[h] = vals[i]; });
-    return row;
-  });
-}
-
 function calcHours(arrival, departure) {
   if (!arrival || !departure) return 0;
   const [ah, am] = arrival.split(':').map(Number);
@@ -195,37 +159,6 @@ async function initDb() {
     UNIQUE(billing_month_label, family_name)
   )`);
   db.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
-
-  const seeded = qOne("SELECT value FROM settings WHERE key = 'seeded'");
-  if (!seeded) {
-    seed();
-  }
-}
-
-function seed() {
-  for (const f of parseCSV(CSV_FAMILIES)) {
-    qRun(`INSERT OR IGNORE INTO families (id, family_name, service_type, hourly_rate, parent_email) VALUES (?, ?, ?, ?, ?)`,
-      [parseInt(f.id) || null, f.family_name, f.service_type || '', parseFloat(f.hourly_rate) || 0, f.parent_email || '']);
-  }
-
-  for (const a of parseCSV(CSV_ATTENDANCES)) {
-    const famId = parseInt(a.family_id) || null;
-    const hrs = calcHours(a.arrival_time, a.departure_time);
-    const fam = qOne("SELECT hourly_rate FROM families WHERE id = ?", [famId]);
-    const rate = fam ? fam.hourly_rate : 0;
-    const amt = Math.round(hrs * rate * 100) / 100;
-    qRun(`INSERT OR IGNORE INTO attendances (id, attendance_date, family_id, family_name, arrival_time, departure_time, total_hours, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [parseInt(a.id) || null, a.attendance_date, famId, a.family_name, a.arrival_time, a.departure_time, hrs, amt]);
-  }
-
-  for (const c of parseCSV(CSV_CAF)) {
-    qRun(`INSERT OR IGNORE INTO caf_subsidies (billing_month_label, family_name, caf_subsidy) VALUES (?, ?, ?)`,
-      [c.billing_month_label, c.family_name, parseFloat(c.caf_subsidy) || 0]);
-  }
-
-  qRun("INSERT INTO settings (key, value) VALUES ('seeded', '1')");
-  saveDb();
-  console.log('Donnees initiales importees');
 }
 
 // ───── HELPERS ─────
