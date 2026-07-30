@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Employé de Particulier — Suivi & Facturation</title>
+<meta name="description" content="Suivi des heures travaillées et facturation mensuelle">
+<meta name="theme-color" content="#0071e3">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Employé Particulier">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+<h1>Employé de Particulier</h1>
+<p class="subtitle" id="db-status">Connexion...</p>
+<nav>
+<button class="tab active" data-page="families">Employeurs</button>
+<button class="tab" data-page="attendances">Présences</button>
+<button class="tab" data-page="billing">Facturation</button>
+</nav>
+</header>
+<main>
+<div id="page-families" class="page active"></div>
+<div id="page-attendances" class="page"></div>
+<div id="page-billing" class="page"></div>
+</main>
+<div id="toast"></div>
+<div class="modal-overlay" id="modal-overlay">
+<div class="modal" id="modal-content"></div>
+</div>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+</script>
+<script src="app.js"></script>
+</body>
+</html>
