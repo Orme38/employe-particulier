@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const stripeLib = require('stripe');
 
 let initSqlJs, SQL;
 try {
@@ -17,6 +18,13 @@ try {
 const app = express();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'emp-particulier-secret-key-change-in-prod';
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
+const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || '';
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || 'price_pro_monthly';
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+const APP_URL = process.env.APP_URL || 'http://localhost:3000';
+
+const stripe = STRIPE_SECRET_KEY ? stripeLib(STRIPE_SECRET_KEY) : null;
 
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -180,6 +188,50 @@ function billingMonthLabel(month, year) {
   return `${MONTHS_FR[month - 1]} ${year}`;
 }
 
+// ───── STRIPE WEBHOOK (raw body needed) ─────
+app.post('/api/subscription/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!stripe || !STRIPE_WEBHOOK_SECRET) { return res.status(200).json({ received: true }); }
+  let event;
+  try {
+    const sig = req.headers['stripe-signature'];
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
+  } catch (e) {
+    console.error('Webhook signature verification failed:', e.message);
+    return res.status(400).send('Webhook Error: ' + e.message);
+  }
+  const session = event.data.object;
+  switch (event.type) {
+    case 'checkout.session.completed': {
+      const customerId = session.customer;
+      const subId = session.subscription;
+      const userId = session.metadata?.user_id;
+      if (userId) {
+        qRun("UPDATE subscriptions SET tier='pro', status='active', stripe_customer_id=?, stripe_subscription_id=?, updated_at=datetime('now') WHERE user_id=?",
+          [customerId || '', subId || '', userId]);
+        saveDb();
+        console.log(`User ${userId} upgraded to Pro via Stripe`);
+      }
+      break;
+    }
+    case 'customer.subscription.deleted':
+    case 'customer.subscription.updated': {
+      const subStatus = session.status;
+      const subId = session.id;
+      const sub = qOne("SELECT user_id FROM subscriptions WHERE stripe_subscription_id = ?", [subId]);
+      if (sub) {
+        const tier = subStatus === 'active' || subStatus === 'trialing' ? 'pro' : 'free';
+        const status = subStatus === 'active' || subStatus === 'trialing' ? 'active' : 'canceled';
+        const periodEnd = session.current_period_end ? new Date(session.current_period_end * 1000).toISOString().split('T')[0] : '';
+        qRun("UPDATE subscriptions SET tier=?, status=?, current_period_end=?, updated_at=datetime('now') WHERE stripe_subscription_id=?",
+          [tier, status, periodEnd, subId]);
+        saveDb();
+      }
+      break;
+    }
+  }
+  res.json({ received: true });
+});
+
 // ───── MIDDLEWARE ─────
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -238,15 +290,44 @@ app.get('/api/subscription/status', authMiddleware, (req, res) => {
   });
 });
 
-app.post('/api/subscription/create-checkout', authMiddleware, (req, res) => {
-  res.json({
-    url: '/subscription?upgrade=manual',
-    message: 'Mode demo - Contactez-nous pour passer en Pro (5€/mois). Dans une version finale, ceci redirigerait vers Stripe.',
-  });
+app.get('/api/subscription/config', (req, res) => {
+  res.json({ publishableKey: STRIPE_PUBLISHABLE_KEY });
 });
 
-app.post('/api/subscription/cancel', authMiddleware, (req, res) => {
-  qRun("UPDATE subscriptions SET tier='free', status='active', updated_at=datetime('now') WHERE user_id=?", [req.user.id]);
+app.post('/api/subscription/create-checkout', authMiddleware, async (req, res) => {
+  if (!stripe) {
+    return res.json({
+      url: '/subscription?upgrade=demo',
+      message: 'Stripe non configure. Contactez l\'administrateur.',
+      demo: true,
+    });
+  }
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+      metadata: { user_id: String(req.user.id) },
+      client_reference_id: String(req.user.id),
+      customer_email: req.user.email,
+      success_url: `${APP_URL}/?checkout=success`,
+      cancel_url: `${APP_URL}/?checkout=canceled`,
+    });
+    res.json({ url: session.url, id: session.id });
+  } catch (e) {
+    console.error('Stripe checkout error:', e.message);
+    res.status(500).json({ error: 'Erreur lors de la creation du paiement' });
+  }
+});
+
+app.post('/api/subscription/cancel', authMiddleware, async (req, res) => {
+  const sub = qOne("SELECT stripe_subscription_id FROM subscriptions WHERE user_id = ?", [req.user.id]);
+  if (sub?.stripe_subscription_id && stripe) {
+    try {
+      await stripe.subscriptions.cancel(sub.stripe_subscription_id);
+    } catch (e) { console.error('Stripe cancel error:', e.message); }
+  }
+  qRun("UPDATE subscriptions SET tier='free', status='canceled', updated_at=datetime('now') WHERE user_id=?", [req.user.id]);
   saveDb();
   res.json({ ok: true, tier: 'free' });
 });
