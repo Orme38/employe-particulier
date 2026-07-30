@@ -1,4 +1,4 @@
-const CACHE = 'employe-v2';
+const CACHE = 'employe-v3';
 const STATIC = [
   '/', '/index.html', '/app.js', '/style.css', '/manifest.json', '/icon.svg'
 ];
@@ -23,8 +23,9 @@ self.addEventListener('fetch', e => {
     return;
   }
 
+  const cleanUrl = url.origin + url.pathname;
   e.respondWith(
-    caches.match(e.request).then(r => r || fetch(e.request).catch(() => new Response('Hors ligne', { status: 503 })))
+    caches.match(cleanUrl).then(r => r || fetch(e.request).catch(() => new Response('Hors ligne', { status: 503 })))
   );
 });
 
