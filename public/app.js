@@ -1,16 +1,39 @@
 'use strict';
 
-// ====================== CONSTANTS ======================
-
 const MONTHS_FR = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
 
-// ====================== STATE ======================
-
-let currentPage = 'families';
+let currentPage = 'dashboard';
 let billingMonth = null;
 let billingYear = null;
+let authToken = localStorage.getItem('token') || null;
+let currentUser = null;
+let userSubscription = null;
+let isDark = localStorage.getItem('darkMode') === '1';
 
-// ====================== TOAST ======================
+function setTheme(dark) {
+  isDark = dark;
+  document.body.classList.toggle('dark', dark);
+  localStorage.setItem('darkMode', dark ? '1' : '0');
+  document.getElementById('dark-toggle').textContent = dark ? '☀️' : '🌙';
+  document.getElementById('theme-color')?.setAttribute('content', dark ? '#1c1c1e' : '#0071e3');
+}
+setTheme(isDark);
+
+async function api(method, url, body) {
+  const opts = { method, headers: {} };
+  if (authToken) opts.headers['Authorization'] = `Bearer ${authToken}`;
+  if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  const res = await fetch(url, opts);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    if (data.upgrade) { showUpgradeModal(data.message || 'Limite atteinte'); }
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  if (method === 'DELETE') return null;
+  const data = await res.json();
+  if (data.error && data.upgrade) { showUpgradeModal(data.message); }
+  return data;
+}
 
 function showToast(msg, duration) {
   const el = document.getElementById('toast');
@@ -19,8 +42,6 @@ function showToast(msg, duration) {
   clearTimeout(el._timer);
   el._timer = setTimeout(() => el.classList.remove('show'), duration || 2500);
 }
-
-// ====================== MODAL ======================
 
 function showModal(html) {
   document.getElementById('modal-content').innerHTML = html;
@@ -35,25 +56,174 @@ document.getElementById('modal-overlay').addEventListener('click', function (e) 
   if (e.target === this) hideModal();
 });
 
-// ====================== API CLIENT ======================
-
-async function api(method, url, body) {
-  const opts = { method, headers: {} };
-  if (body) {
-    opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(body);
-  }
-  const res = await fetch(url, opts);
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    throw new Error(`HTTP ${res.status}: ${txt}`);
-  }
-  if (method === 'DELETE') return null;
-  return res.json();
+// ───── UPGRADE MODAL ─────
+function showUpgradeModal(msg) {
+  const html = `<div class="text-center" style="padding:8px 0">
+    <div style="font-size:48px;margin-bottom:12px">⭐</div>
+    <h3>Version Pro requise</h3>
+    <p style="color:var(--text-secondary);margin-bottom:16px">${msg || 'Vous avez atteint la limite gratuite.'}</p>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px">Passer en Pro : <strong>5€/mois</strong> — employeurs et présences illimités.</p>
+    <div class="modal-actions" style="justify-content:center">
+      <button class="btn btn-outline" onclick="hideModal()">Plus tard</button>
+      <button class="btn btn-pro" onclick="hideModal();navigateTo('families');showProInfo()">Passer en Pro</button>
+    </div>
+  </div>`;
+  showModal(html);
 }
 
-// ====================== FAMILY OPERATIONS ======================
+function showProInfo() {
+  const html = `<div class="text-center" style="padding:8px 0">
+    <div style="font-size:48px;margin-bottom:12px">⭐</div>
+    <h3>Employé de Particulier Pro</h3>
+    <p style="color:var(--text-secondary);margin:12px 0">Profitez de toutes les fonctionnalités sans limite.</p>
+    <div style="text-align:left;margin:16px 0;padding:12px;background:var(--bg);border-radius:var(--radius-sm)">
+      <div style="display:flex;justify-content:space-between;padding:6px 0"><span>✅ Gratuit</span><span>2 employeurs · 10 présences/mois</span></div>
+      <div style="display:flex;justify-content:space-between;padding:6px 0"><span>⭐ Pro</span><span><strong>Illimité</strong></span></div>
+    </div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:8px">${authToken ? 'Mode demo - Contactez-nous pour activer' : 'Connectez-vous pour gérer votre abonnement'}</p>
+    ${authToken ? `<p style="font-size:13px;color:var(--muted)">Email : pro@employe-particulier.app</p>` : ''}
+    <div class="modal-actions" style="justify-content:center">
+      <button class="btn btn-outline" onclick="hideModal()">Fermer</button>
+    </div>
+  </div>`;
+  showModal(html);
+}
 
+// ───── AUTH ─────
+async function checkAuth() {
+  if (!authToken) { currentUser = null; userSubscription = null; updateAuthUI(); return; }
+  try {
+    const data = await api('GET', '/api/auth/me');
+    currentUser = data.user;
+    userSubscription = data.subscription;
+  } catch {
+    authToken = null; localStorage.removeItem('token');
+    currentUser = null; userSubscription = null;
+  }
+  updateAuthUI();
+}
+
+function updateAuthUI() {
+  const btn = document.getElementById('auth-btn');
+  if (currentUser) {
+    btn.textContent = currentUser.email;
+    if (userSubscription?.tier === 'pro') btn.innerHTML = currentUser.email + ' <span class="pro-badge">PRO</span>';
+  } else {
+    btn.textContent = 'Connexion';
+  }
+}
+
+document.getElementById('auth-btn').addEventListener('click', () => {
+  if (currentUser) { navigateTo('account'); return; }
+  showAuthModal();
+});
+
+document.getElementById('app-title').addEventListener('click', () => navigateTo('dashboard'));
+document.getElementById('dark-toggle').addEventListener('click', () => setTheme(!isDark));
+
+function showAuthModal() {
+  const html = `<div class="auth-tabs">
+      <button class="auth-tab active" onclick="switchAuthTab(this,'login')">Connexion</button>
+      <button class="auth-tab" onclick="switchAuthTab(this,'register')">Inscription</button>
+    </div>
+    <div id="auth-form-container">
+      <form id="auth-login-form" onsubmit="return submitLogin(event)">
+        <div class="form-group"><label>Email</label><input type="email" name="email" required placeholder="votre@email.fr" autocomplete="email"></div>
+        <div class="form-group"><label>Mot de passe</label><input type="password" name="password" required minlength="4" autocomplete="current-password"></div>
+        <button type="submit" class="btn btn-primary btn-block">Se connecter</button>
+        <p class="form-text text-center" style="margin-top:12px">Pas encore de compte ? <a href="#" onclick="switchAuthTab(document.querySelector('.auth-tab:last-child'),'register');return false">S'inscrire</a></p>
+      </form>
+      <form id="auth-register-form" style="display:none" onsubmit="return submitRegister(event)">
+        <div class="form-group"><label>Nom (optionnel)</label><input type="text" name="name" placeholder="Votre nom"></div>
+        <div class="form-group"><label>Email</label><input type="email" name="email" required placeholder="votre@email.fr" autocomplete="email"></div>
+        <div class="form-group"><label>Mot de passe</label><input type="password" name="password" required minlength="4" autocomplete="new-password"></div>
+        <button type="submit" class="btn btn-primary btn-block">S'inscrire</button>
+        <p class="form-text text-center" style="margin-top:12px">Déjà un compte ? <a href="#" onclick="switchAuthTab(document.querySelector('.auth-tab:first-child'),'login');return false">Se connecter</a></p>
+      </form>
+    </div>`;
+  showModal(html);
+}
+
+function switchAuthTab(el, tab) {
+  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('auth-login-form').style.display = tab === 'login' ? 'block' : 'none';
+  document.getElementById('auth-register-form').style.display = tab === 'register' ? 'block' : 'none';
+}
+
+async function submitLogin(e) {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const data = Object.fromEntries(fd.entries());
+  try {
+    const res = await api('POST', '/api/auth/login', data);
+    authToken = res.token; localStorage.setItem('token', res.token);
+    currentUser = res.user;
+    hideModal(); await checkAuth(); await renderCurrentPage(); showToast('Connecte ✓');
+  } catch (err) { showToast('Erreur: ' + err.message); }
+  return false;
+}
+
+async function submitRegister(e) {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const data = Object.fromEntries(fd.entries());
+  try {
+    const res = await api('POST', '/api/auth/register', data);
+    authToken = res.token; localStorage.setItem('token', res.token);
+    currentUser = res.user;
+    hideModal(); await checkAuth(); await renderCurrentPage(); showToast('Compte cree ✓');
+  } catch (err) { showToast('Erreur: ' + err.message); }
+  return false;
+}
+
+function logout() {
+  authToken = null; localStorage.removeItem('token');
+  currentUser = null; userSubscription = null;
+  updateAuthUI(); renderCurrentPage(); showToast('Deconnecte');
+}
+
+// ───── ACCOUNT PAGE ─────
+async function renderAccountPage() {
+  const el = document.getElementById('page-account');
+  if (!currentUser) { await renderFamiliesPage(); return; }
+  const isPro = userSubscription?.tier === 'pro';
+  el.innerHTML = `<div class="card">
+      <h2>Mon compte</h2>
+      <div class="profile-card">
+        <div class="profile-avatar">${currentUser.name ? currentUser.name[0].toUpperCase() : '👤'}</div>
+        <div class="profile-info">
+          <div class="pi-name">${esc(currentUser.name || 'Utilisateur')}</div>
+          <div class="pi-email">${esc(currentUser.email)}</div>
+        </div>
+        ${isPro ? '<span class="pro-badge">PRO</span>' : ''}
+      </div>
+    </div>
+    <div class="card">
+      <h2>Abonnement</h2>
+      <p style="margin-bottom:12px;color:var(--text-secondary)">
+        ${isPro ? '✅ Vous etes abonne au plan <strong>Pro</strong>.' : '⭐ Vous etes sur le plan <strong>Gratuit</strong>.'}
+        ${isPro ? '' : 'Passez en Pro pour debloquer les limites.'}
+      </p>
+      ${isPro ? `
+        <p style="font-size:13px;color:var(--muted);margin-bottom:12px">${userSubscription?.current_period_end ? 'Valable jusqu\'au ' + userSubscription.current_period_end : 'Abonnement actif'}</p>
+        <button class="btn btn-outline" onclick="cancelSubscription()">Resilier l'abonnement</button>
+      ` : `
+        <button class="btn btn-pro btn-block" onclick="hideModal();showProInfo()">Passer en Pro - 5€/mois</button>
+      `}
+    </div>
+    <div class="card">
+      <button class="btn btn-outline btn-block" onclick="logout()" style="color:var(--danger);border-color:var(--danger)">Se deconnecter</button>
+    </div>`;
+}
+
+async function cancelSubscription() {
+  if (!confirm('Voulez-vous vraiment resilier ?')) return;
+  await api('POST', '/api/subscription/cancel');
+  await checkAuth(); await renderAccountPage(); showToast('Abonnement resilie');
+}
+
+// ───── FAMILY OPERATIONS ─────
 async function getFamilies(search) {
   const q = search ? `?search=${encodeURIComponent(search)}` : '';
   return api('GET', '/api/families' + q);
@@ -69,27 +239,13 @@ async function getFamilyByName(name) {
 }
 
 async function saveFamily(data) {
-  if (data.id) {
-    return api('PUT', `/api/families/${data.id}`, data);
-  } else {
-    return api('POST', '/api/families', data);
-  }
+  if (data.id) { return api('PUT', `/api/families/${data.id}`, data); }
+  else { return api('POST', '/api/families', data); }
 }
 
-async function deleteFamily(id) {
-  return api('DELETE', `/api/families/${id}`);
-}
+async function deleteFamily(id) { return api('DELETE', `/api/families/${id}`); }
 
-async function getOrCreateFamilyByName(name) {
-  let fam = await getFamilyByName(name.trim());
-  if (!fam) {
-    fam = await api('POST', '/api/families', { family_name: name.trim(), hourly_rate: 0 });
-  }
-  return fam;
-}
-
-// ====================== ATTENDANCE OPERATIONS ======================
-
+// ───── ATTENDANCE OPERATIONS ─────
 async function getAttendances(filters) {
   const params = new URLSearchParams();
   if (filters?.month) params.set('month', filters.month);
@@ -99,29 +255,14 @@ async function getAttendances(filters) {
   return api('GET', '/api/attendances?' + params.toString());
 }
 
-async function saveAttendance(data) {
-  return api('POST', '/api/attendances', data);
-}
+async function saveAttendance(data) { return api('POST', '/api/attendances', data); }
+async function deleteAttendance(id) { return api('DELETE', `/api/attendances/${id}`); }
 
-async function deleteAttendance(id) {
-  return api('DELETE', `/api/attendances/${id}`);
-}
-
-// ====================== BILLING OPERATIONS ======================
-
-async function getBillingData(month, year) {
-  return api('GET', `/api/billing?month=${month}&year=${year}`);
-}
-
+// ───── BILLING OPERATIONS ─────
+async function getBillingData(month, year) { return api('GET', `/api/billing?month=${month}&year=${year}`); }
 async function saveCafSubsidy(monthLabel, familyName, amount) {
-  return api('POST', '/api/billing/caf', {
-    billing_month_label: monthLabel,
-    family_name: familyName,
-    caf_subsidy: parseFloat(amount) || 0
-  });
+  return api('POST', '/api/billing/caf', { billing_month_label: monthLabel, family_name: familyName, caf_subsidy: parseFloat(amount) || 0 });
 }
-
-// ====================== HOURS CALCULATION ======================
 
 function calcHours(arrival, departure) {
   if (!arrival || !departure) return 0;
@@ -134,101 +275,103 @@ function calcHours(arrival, departure) {
   return Math.round((end - start) / 60 * 100) / 100;
 }
 
-// ====================== UI: FAMILIES ======================
+// ───── DASHBOARD ─────
+async function renderDashboardPage() {
+  const el = document.getElementById('page-dashboard');
+  let data;
+  try { data = await api('GET', '/api/dashboard'); } catch { data = null; }
 
+  if (!data) {
+    el.innerHTML = `<div class="card text-center empty-state"><p>Chargement...</p></div>`;
+    return;
+  }
+
+  const cm = data.current_month;
+
+  let upgradeHtml = '';
+  if (currentUser && userSubscription?.tier !== 'pro') {
+    upgradeHtml = `<div class="upgrade-card">
+      <h3>⭐ Passez en Pro</h3>
+      <p>Employeurs et presences illimites pour seulement 5€/mois</p>
+      <button class="btn" onclick="showProInfo()">Decouvrir le plan Pro</button>
+    </div>`;
+  } else if (!currentUser) {
+    upgradeHtml = `<div class="upgrade-card">
+      <h3>🔐 Creer un compte</h3>
+      <p>Sauvegardez vos donnees et accedez-y depuis n'importe ou</p>
+      <button class="btn" onclick="showAuthModal()">Creer un compte gratuit</button>
+    </div>`;
+  }
+
+  el.innerHTML = `${upgradeHtml}
+    <div class="card"><h2>${data.month} ${data.year}</h2>
+      <div class="stats-grid">
+        <div class="stat-card highlight"><div class="stat-icon">💰</div><div class="stat-label">Gagne ce mois</div><div class="stat-value">${cm.total_amount.toFixed(2).replace('.',',')} €</div></div>
+        <div class="stat-card"><div class="stat-icon">⏰</div><div class="stat-label">Heures travaillees</div><div class="stat-value">${cm.total_hours.toFixed(1).replace('.',',')}</div><div class="stat-sub">${cm.days_count} jours · ${cm.families_count} employeur(s)</div></div>
+        <div class="stat-card"><div class="stat-icon">🏢</div><div class="stat-label">Total employeurs</div><div class="stat-value">${data.all_time.total_families}</div><div class="stat-sub">Tous les mois confondus</div></div>
+        <div class="stat-card"><div class="stat-icon">📊</div><div class="stat-label">Total gagne</div><div class="stat-value">${data.all_time.total_earned.toFixed(2).replace('.',',')} €</div></div>
+      </div>
+    </div>
+    <div class="card"><h2>Dernieres presences</h2>
+      ${data.recent.length === 0 ? '<div class="empty-state"><p>Aucune presence recente</p></div>' : ''}
+      ${data.recent.map(r => {
+        const date = formatDateShort(r.attendance_date);
+        const hrs = (r.total_hours || 0).toFixed(2).replace('.', ',');
+        const amt = (r.amount || 0).toFixed(2).replace('.', ',');
+        return `<div class="recent-item">
+          <div class="ri-left"><div class="ri-name">${esc(r.family_name)}</div><div class="ri-date">${date} · ${r.arrival_time.slice(0,5)}→${r.departure_time.slice(0,5)}</div></div>
+          <div class="ri-right"><div class="ri-amount">${amt} €</div><div class="ri-hours">${hrs} h</div></div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+// ───── UI: FAMILIES ─────
 async function renderFamiliesPage() {
   const families = await getFamilies();
   const el = document.getElementById('page-families');
-
   let html = `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <h2 style="margin:0">Employeurs</h2>
-      <button class="btn btn-primary btn-sm" onclick="showFamilyForm()">+ Ajouter</button>
+      ${authToken ? '<button class="btn btn-primary btn-sm" onclick="showFamilyForm()">+ Ajouter</button>' : ''}
     </div>`;
-
-  if (families.length === 0) {
-    html += `<div class="empty-state"><p>Aucun employeur inscrit</p></div>`;
-  } else {
-    // Table for desktop
-    html += `<table class="data-table"><thead><tr>
-      <th>Famille</th><th>Service</th><th class="text-right">Tarif/h</th><th></th>
-    </tr></thead><tbody>`;
-
+  if (families.length === 0) { html += `<div class="empty-state"><p>Aucun employeur</p></div>`; }
+  else {
+    html += `<table class="data-table"><thead><tr><th>Famille</th><th>Service</th><th class="text-right">Tarif/h</th>${authToken ? '<th></th>' : ''}</tr></thead><tbody>`;
     for (const f of families) {
       const rate = (f.hourly_rate || 0).toFixed(2).replace('.', ',');
-      html += `<tr>
-        <td class="truncate"><strong>${esc(f.family_name)}</strong></td>
-        <td class="truncate">${esc(f.service_type || '-')}</td>
-        <td class="text-right font-mono">${rate} €</td>
-        <td class="text-right">
-          <button class="btn btn-outline btn-sm" onclick="showFamilyForm(${f.id})" aria-label="Modifier">✎</button>
-          <button class="btn btn-danger btn-sm" onclick="confirmDeleteFamily(${f.id})" aria-label="Supprimer">✕</button>
-        </td>
-      </tr>`;
+      html += `<tr><td class="truncate"><strong>${esc(f.family_name)}</strong></td><td class="truncate">${esc(f.service_type || '-')}</td><td class="text-right font-mono">${rate} €</td>
+        ${authToken ? `<td class="text-right"><button class="btn btn-outline btn-sm" onclick="showFamilyForm(${f.id})">✎</button><button class="btn btn-danger btn-sm" onclick="confirmDeleteFamily(${f.id})">✕</button></td>` : ''}</tr>`;
     }
     html += `</tbody></table>`;
-
-    // Cards for mobile
     html += `<div class="card-list">`;
     for (const f of families) {
       const rate = (f.hourly_rate || 0).toFixed(2).replace('.', ',');
       const svc = f.service_type ? `${esc(f.service_type)} · ` : '';
-      html += `<div class="card-item">
-        <div class="item-info">
-          <div class="item-value">${esc(f.family_name)}</div>
-          <div class="item-label">${svc}${rate} €/h</div>
-        </div>
-        <div class="item-actions">
-          <button class="btn btn-outline btn-sm" onclick="showFamilyForm(${f.id})" aria-label="Modifier">✎</button>
-          <button class="btn btn-danger btn-sm" onclick="confirmDeleteFamily(${f.id})" aria-label="Supprimer">✕</button>
-        </div>
-      </div>`;
+      html += `<div class="card-item"><div class="item-info"><div class="item-value">${esc(f.family_name)}</div><div class="item-label">${svc}${rate} €/h</div></div>
+        ${authToken ? `<div class="item-actions"><button class="btn btn-outline btn-sm" onclick="showFamilyForm(${f.id})">✎</button><button class="btn btn-danger btn-sm" onclick="confirmDeleteFamily(${f.id})">✕</button></div>` : ''}</div>`;
     }
     html += `</div>`;
   }
-
   html += `</div>
-    <div class="card" style="font-size:13px;color:var(--muted)">
-      <p>💡 Les nouveaux employeurs peuvent aussi être créés automatiquement depuis la page <strong>Présences</strong>.</p>
-    </div>`;
-
+    ${!authToken ? `<div class="card upgrade-card"><h3>🔐 Connectez-vous</h3><p>Pour ajouter et gerer vos employeurs</p><button class="btn" onclick="showAuthModal()">Se connecter</button></div>` : ''}
+    <div class="card" style="font-size:13px;color:var(--muted)"><p>💡 Les employeurs peuvent aussi etre crees depuis la page <strong>Presences</strong>.</p></div>`;
   el.innerHTML = html;
 }
 
 function showFamilyForm(id) {
   (async () => {
     const fam = id ? await getFamily(id) : null;
-    const title = fam ? 'Modifier l\'employeur' : 'Nouvel employeur';
+    const title = fam ? "Modifier l'employeur" : 'Nouvel employeur';
     const html = `<h3>${title}</h3>
       <form id="family-form" onsubmit="return submitFamily(event)">
         ${fam ? `<input type="hidden" name="id" value="${fam.id}">` : ''}
-        <div class="form-group">
-          <label>Nom de famille</label>
-          <input type="text" name="family_name" required value="${fam ? escAttr(fam.family_name) : ''}" placeholder="Ex: Dupont">
-        </div>
-        <div class="form-group">
-          <label>Type de service</label>
-          <input type="text" name="service_type" value="${fam ? escAttr(fam.service_type || '') : ''}" placeholder="Ex: Ménage, Jardinage, Garde d'enfants..." list="service-types">
-          <datalist id="service-types">
-            <option value="Garde d'enfants">
-            <option value="Ménage / Entretien">
-            <option value="Jardinage">
-            <option value="Soutien scolaire">
-            <option value="Soins à la personne">
-            <option value="Bricolage">
-            <option value="Courses / Commissions">
-          </datalist>
-        </div>
-        <div class="form-row">
-          <div class="form-group"><label>Tarif horaire (€)</label>
-            <input type="number" name="hourly_rate" step="0.5" min="0" value="${fam ? (fam.hourly_rate || 0) : ''}"></div>
-          <div class="form-group"><label>Email</label>
-            <input type="email" name="parent_email" value="${fam ? escAttr(fam.parent_email || '') : ''}" placeholder="email@exemple.fr"></div>
-        </div>
-        <div class="modal-actions">
-          <button type="button" class="btn btn-outline" onclick="hideModal()">Annuler</button>
-          <button type="submit" class="btn btn-primary">Enregistrer</button>
-        </div>
+        <div class="form-group"><label>Nom de famille</label><input type="text" name="family_name" required value="${fam ? escAttr(fam.family_name) : ''}" placeholder="Ex: Dupont"></div>
+        <div class="form-group"><label>Type de service</label><input type="text" name="service_type" value="${fam ? escAttr(fam.service_type || '') : ''}" placeholder="Ex: Menage, Jardinage..." list="service-types">
+          <datalist id="service-types"><option value="Garde d'enfants"><option value="Menage / Entretien"><option value="Jardinage"><option value="Soutien scolaire"><option value="Soins a la personne"><option value="Bricolage"><option value="Courses / Commissions"></datalist></div>
+        <div class="form-row"><div class="form-group"><label>Tarif horaire (€)</label><input type="number" name="hourly_rate" step="0.5" min="0" value="${fam ? (fam.hourly_rate || 0) : ''}"></div>
+          <div class="form-group"><label>Email</label><input type="email" name="parent_email" value="${fam ? escAttr(fam.parent_email || '') : ''}" placeholder="email@exemple.fr"></div></div>
+        <div class="modal-actions"><button type="button" class="btn btn-outline" onclick="hideModal()">Annuler</button><button type="submit" class="btn btn-primary">Enregistrer</button></div>
       </form>`;
     showModal(html);
   })();
@@ -238,79 +381,43 @@ async function submitFamily(e) {
   e.preventDefault();
   const fd = new FormData(e.target);
   const data = Object.fromEntries(fd.entries());
-  try {
-    await saveFamily(data);
-    hideModal();
-    await renderFamiliesPage();
-    showToast('Famille enregistrée ✓');
-  } catch (err) {
-    showToast('Erreur: ' + err.message);
-  }
+  try { await saveFamily(data); hideModal(); await renderFamiliesPage(); showToast('Enregistre ✓'); }
+  catch (err) { showToast('Erreur: ' + err.message); }
   return false;
 }
 
 function confirmDeleteFamily(id) {
   (async () => {
-    const fam = await getFamily(id);
-    if (!fam) return;
+    const fam = await getFamily(id); if (!fam) return;
     const html = `<h3>Supprimer ${esc(fam.family_name)} ?</h3>
-      <p style="color:var(--muted);margin-bottom:16px">Toutes les présences associées seront supprimées.</p>
-      <div class="modal-actions">
-        <button class="btn btn-outline" onclick="hideModal()">Annuler</button>
-        <button class="btn btn-danger" onclick="doDeleteFamily(${id})">Supprimer</button>
-      </div>`;
+      <p style="color:var(--text-secondary);margin-bottom:16px">Toutes les presences associees seront supprimees.</p>
+      <div class="modal-actions"><button class="btn btn-outline" onclick="hideModal()">Annuler</button><button class="btn btn-danger" onclick="doDeleteFamily(${id})">Supprimer</button></div>`;
     showModal(html);
   })();
 }
 
 async function doDeleteFamily(id) {
-  await deleteFamily(id);
-  hideModal();
-  await renderFamiliesPage();
-  showToast('Famille supprimée');
+  await deleteFamily(id); hideModal(); await renderFamiliesPage(); showToast('Supprime');
 }
 
-// ====================== UI: ATTENDANCES ======================
-
+// ───── UI: ATTENDANCES ─────
 async function renderAttendancesPage() {
   const today = new Date().toISOString().split('T')[0];
   const el = document.getElementById('page-attendances');
-
-  const html = `<div class="card">
-      <h2>Nouvelle présence</h2>
+  let html = '';
+  if (authToken) {
+    html += `<div class="card"><h2>Nouvelle presence</h2>
       <form id="attendance-form" onsubmit="return submitAttendance(event)">
-        <div class="form-group">
-          <label>Date</label>
-          <input type="date" name="attendance_date" value="${today}" required>
-        </div>
-        <div class="form-group">
-          <label>Nom de famille</label>
-          <input type="text" name="family_name" id="att-family-name" required
-            placeholder="Tapez un nom de famille" autocomplete="off"
-            oninput="onFamilyNameInput(this.value)">
-          <div id="att-family-info" class="auto-value"></div>
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Arrivée</label>
-            <input type="time" name="arrival_time" id="att-arrival" value="08:00" required onchange="calcAttendancePreview()">
-          </div>
-          <div class="form-group">
-            <label>Départ</label>
-            <input type="time" name="departure_time" id="att-departure" value="17:00" required onchange="calcAttendancePreview()">
-          </div>
-        </div>
-        <div id="att-preview" class="billing-total" style="display:none">
-          <strong id="att-preview-text"></strong>
-        </div>
-        <button type="submit" class="btn btn-primary btn-block" style="margin-top:12px">Enregistrer la présence</button>
-      </form>
-    </div>
-    <div class="card">
-      <h2>Présences récentes</h2>
-      <div id="attendance-list"></div>
-    </div>`;
-
+        <div class="form-group"><label>Date</label><input type="date" name="attendance_date" value="${today}" required></div>
+        <div class="form-group"><label>Nom de famille</label><input type="text" name="family_name" id="att-family-name" required placeholder="Tapez un nom" autocomplete="off" oninput="onFamilyNameInput(this.value)">
+          <div id="att-family-info" class="auto-value"></div></div>
+        <div class="form-row"><div class="form-group"><label>Arrivee</label><input type="time" name="arrival_time" id="att-arrival" value="08:00" required onchange="calcAttendancePreview()"></div>
+          <div class="form-group"><label>Depart</label><input type="time" name="departure_time" id="att-departure" value="17:00" required onchange="calcAttendancePreview()"></div></div>
+        <div id="att-preview" class="billing-total" style="display:none"><strong id="att-preview-text"></strong></div>
+        <button type="submit" class="btn btn-primary btn-block" style="margin-top:12px">Enregistrer</button>
+      </form></div>`;
+  }
+  html += `<div class="card"><h2>Presences recentes</h2><div id="attendance-list"></div></div>`;
   el.innerHTML = html;
   await renderAttendanceList();
 }
@@ -326,7 +433,7 @@ async function onFamilyNameInput(value) {
       if (fam.service_type) txt += ` — ${esc(fam.service_type)}`;
       info.innerHTML = txt;
     } else {
-      info.innerHTML = `🆕 Nouvel employeur — tarif à 0 € (à modifier dans <a href="#" onclick="navigateTo('families');return false">Employeurs</a>)`;
+      info.innerHTML = `🆕 Nouvel employeur — tarif a 0 € (a modifier dans <a href="#" onclick="navigateTo('families');return false">Employeurs</a>)`;
     }
   } catch (_) {}
   calcAttendancePreview();
@@ -346,12 +453,8 @@ async function calcAttendancePreview() {
     const rate = fam ? (fam.hourly_rate || 0) : 0;
     const amt = Math.round(hrs * rate * 100) / 100;
     preview.style.display = 'block';
-    const hs = hrs.toFixed(2).replace('.', ',');
-    const rs = rate.toFixed(2).replace('.', ',');
-    const as = amt.toFixed(2).replace('.', ',');
-    previewText.innerHTML = fam
-      ? `${hs} h × ${rs} €/h = <span style="font-size:18px">${as} €</span>`
-      : `${hs} h × ${rs} €/h = <span style="font-size:18px">${as} €</span> <span style="color:var(--muted)">(tarif à définir)</span>`;
+    const hs = hrs.toFixed(2).replace('.', ','); const rs = rate.toFixed(2).replace('.', ','); const as = amt.toFixed(2).replace('.', ',');
+    previewText.innerHTML = fam ? `${hs} h × ${rs} €/h = <span style="font-size:18px">${as} €</span>` : `${hs} h × ${rs} €/h = ${as} € (tarif a definir)`;
   } catch (_) { preview.style.display = 'none'; }
 }
 
@@ -359,17 +462,14 @@ async function submitAttendance(e) {
   e.preventDefault();
   const fd = new FormData(e.target);
   const data = Object.fromEntries(fd.entries());
-  if (!data.family_name.trim()) { showToast('Veuillez entrer un nom de famille'); return false; }
+  if (!data.family_name.trim()) { showToast('Entrez un nom'); return false; }
   try {
     const result = await saveAttendance(data);
-    e.target.reset();
-    document.getElementById('att-arrival').value = '08:00';
+    e.target.reset(); document.getElementById('att-arrival').value = '08:00';
     document.getElementById('att-departure').value = '17:00';
     document.getElementById('att-family-info').textContent = '';
     document.getElementById('att-preview').style.display = 'none';
-    const hs = (result.total_hours || 0).toFixed(2).replace('.', ',');
-    const as = (result.amount || 0).toFixed(2).replace('.', ',');
-    showToast(`${result.family_name} — ${hs} h, ${as} € ✓`);
+    showToast(`${result.family_name} — ${(result.total_hours||0).toFixed(2).replace('.',',')} h, ${(result.amount||0).toFixed(2).replace('.',',')} € ✓`);
     await renderAttendanceList();
   } catch (err) { showToast('Erreur: ' + err.message); }
   return false;
@@ -379,84 +479,47 @@ async function renderAttendanceList() {
   const list = document.getElementById('attendance-list');
   if (!list) return;
   const rows = await getAttendances({ limit: 50 });
-  if (rows.length === 0) {
-    list.innerHTML = `<div class="empty-state"><p>Aucune présence enregistrée</p></div>`;
-    return;
-  }
-
-  // Table (desktop)
-  let html = `<table class="data-table"><thead><tr>
-    <th>Date</th><th>Famille</th><th>Arrivée</th><th>Départ</th><th class="text-right">Heures</th><th class="text-right">Montant</th><th></th>
-  </tr></thead><tbody>`;
-
+  if (rows.length === 0) { list.innerHTML = `<div class="empty-state"><p>Aucune presence</p></div>`; return; }
+  let html = `<table class="data-table"><thead><tr><th>Date</th><th>Famille</th><th>Arrivee</th><th>Depart</th><th class="text-right">Heures</th><th class="text-right">Montant</th>${authToken ? '<th></th>' : ''}</tr></thead><tbody>`;
   for (const r of rows) {
-    const hrs = (r.total_hours || 0).toFixed(2).replace('.', ',');
-    const amt = (r.amount || 0).toFixed(2).replace('.', ',');
-    const date = formatDateShort(r.attendance_date);
-    html += `<tr>
-      <td>${date}</td><td class="truncate">${esc(r.family_name)}</td>
-      <td>${r.arrival_time.slice(0,5)}</td><td>${r.departure_time.slice(0,5)}</td>
-      <td class="text-right font-mono">${hrs}</td>
-      <td class="text-right font-mono">${amt} €</td>
-      <td class="text-right"><button class="btn btn-danger btn-sm" onclick="confirmDeleteAttendance(${r.id})" aria-label="Supprimer">✕</button></td>
-    </tr>`;
+    const hrs = (r.total_hours || 0).toFixed(2).replace('.', ','); const amt = (r.amount || 0).toFixed(2).replace('.', ',');
+    html += `<tr><td>${formatDateShort(r.attendance_date)}</td><td class="truncate">${esc(r.family_name)}</td><td>${r.arrival_time.slice(0,5)}</td><td>${r.departure_time.slice(0,5)}</td><td class="text-right font-mono">${hrs}</td><td class="text-right font-mono">${amt} €</td>
+      ${authToken ? `<td class="text-right"><button class="btn btn-danger btn-sm" onclick="confirmDeleteAttendance(${r.id})">✕</button></td>` : ''}</tr>`;
   }
   html += `</tbody></table>`;
-
-  // Cards (mobile)
   html += `<div class="card-list">`;
   for (const r of rows) {
-    const hrs = (r.total_hours || 0).toFixed(2).replace('.', ',');
-    const amt = (r.amount || 0).toFixed(2).replace('.', ',');
-    const date = formatDateShort(r.attendance_date);
-    html += `<div class="card-item">
-      <div class="item-info">
-        <div class="item-value">${esc(r.family_name)} · ${date}</div>
-        <div class="item-label">${r.arrival_time.slice(0,5)} → ${r.departure_time.slice(0,5)} · ${hrs} h · ${amt} €</div>
-      </div>
-      <div class="item-actions">
-        <button class="btn btn-danger btn-sm" onclick="confirmDeleteAttendance(${r.id})" aria-label="Supprimer">✕</button>
-      </div>
-    </div>`;
+    const hrs = (r.total_hours || 0).toFixed(2).replace('.', ','); const amt = (r.amount || 0).toFixed(2).replace('.', ',');
+    html += `<div class="card-item"><div class="item-info"><div class="item-value">${esc(r.family_name)} · ${formatDateShort(r.attendance_date)}</div><div class="item-label">${r.arrival_time.slice(0,5)} → ${r.departure_time.slice(0,5)} · ${hrs} h · ${amt} €</div></div>
+      ${authToken ? `<div class="item-actions"><button class="btn btn-danger btn-sm" onclick="confirmDeleteAttendance(${r.id})">✕</button></div>` : ''}</div>`;
   }
   html += `</div>`;
-
   list.innerHTML = html;
 }
 
 function confirmDeleteAttendance(id) {
-  const html = `<h3>Supprimer cette présence ?</h3>
-    <p style="color:var(--muted);margin-bottom:16px">Action irréversible.</p>
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="hideModal()">Annuler</button>
-      <button class="btn btn-danger" onclick="doDeleteAttendance(${id})">Supprimer</button>
-    </div>`;
+  const html = `<h3>Supprimer cette presence ?</h3><p style="color:var(--text-secondary);margin-bottom:16px">Action irreversible.</p>
+    <div class="modal-actions"><button class="btn btn-outline" onclick="hideModal()">Annuler</button><button class="btn btn-danger" onclick="doDeleteAttendance(${id})">Supprimer</button></div>`;
   showModal(html);
 }
 
 async function doDeleteAttendance(id) {
-  await deleteAttendance(id);
-  hideModal();
-  await renderAttendanceList();
-  showToast('Présence supprimée');
+  await deleteAttendance(id); hideModal(); await renderAttendanceList(); showToast('Supprimee');
 }
 
-// ====================== UI: BILLING ======================
-
+// ───── UI: BILLING ─────
 async function renderBillingPage() {
   const now = new Date();
   if (billingMonth === null) billingMonth = now.getMonth() + 1;
   if (billingYear === null) billingYear = now.getFullYear();
   const el = document.getElementById('page-billing');
   const monthLabel = `${MONTHS_FR[billingMonth - 1]} ${billingYear}`;
-
   el.innerHTML = `<div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <button class="btn btn-outline btn-sm" onclick="changeBillingMonth(-1)">◀</button>
         <h2 style="margin:0;font-size:18px">${monthLabel}</h2>
         <button class="btn btn-outline btn-sm" onclick="changeBillingMonth(1)">▶</button>
-      </div>
-    </div>
+      </div></div>
     <div class="card"><div id="billing-content">Calcul...</div></div>`;
   await renderBillingContent();
 }
@@ -471,76 +534,33 @@ async function changeBillingMonth(delta) {
 async function renderBillingContent() {
   const content = document.getElementById('billing-content');
   if (!content) return;
-  const monthLabel = `${MONTHS_FR[billingMonth - 1]} ${billingYear}`;
-
   let data;
-  try { data = await getBillingData(billingMonth, billingYear); } catch (_) { data = []; }
-
-  if (data.length === 0) {
-    content.innerHTML = `<div class="empty-state"><p>Aucune présence ce mois-ci</p></div>`;
-    return;
-  }
-
-  // Table (desktop)
-  let html = `<table class="data-table"><thead><tr>
-    <th>Famille</th><th>Jours</th><th class="text-right">Heures</th><th class="text-right">Brut</th><th class="text-right">CAF</th><th class="text-right">Net</th>
-  </tr></thead><tbody>`;
-
+  try { data = await getBillingData(billingMonth, billingYear); } catch { data = []; }
+  if (data.length === 0) { content.innerHTML = `<div class="empty-state"><p>Aucune presence ce mois-ci</p></div>`; return; }
+  let html = `<table class="data-table"><thead><tr><th>Famille</th><th>Jours</th><th class="text-right">Heures</th><th class="text-right">Brut</th><th class="text-right">CAF</th><th class="text-right">Net</th></tr></thead><tbody>`;
   let totalHours = 0, totalGross = 0, totalSubsidy = 0, totalNet = 0;
-
   for (const r of data) {
-    totalHours += r.total_hours; totalGross += r.gross_amount;
-    totalSubsidy += r.caf_subsidy; totalNet += r.net_amount;
-    const hrs = r.total_hours.toFixed(2).replace('.', ',');
-    const gross = r.gross_amount.toFixed(2).replace('.', ',');
-    const net = r.net_amount.toFixed(2).replace('.', ',');
-    html += `<tr>
-      <td><strong>${esc(r.family_name)}</strong></td>
-      <td>${r.days}</td>
-      <td class="text-right font-mono">${hrs}</td>
-      <td class="text-right font-mono">${gross} €</td>
-      <td class="text-right">
-        <input class="caf-input" type="number" step="0.5" min="0"
-          value="${r.caf_subsidy > 0 ? r.caf_subsidy : ''}"
-          onchange="onCafChange('${escAttr(r.family_name)}', this.value)"
-          placeholder="0">
-      </td>
-      <td class="text-right font-mono"><strong>${net} €</strong></td>
-    </tr>`;
+    totalHours += r.total_hours; totalGross += r.gross_amount; totalSubsidy += r.caf_subsidy; totalNet += r.net_amount;
+    html += `<tr><td><strong>${esc(r.family_name)}</strong></td><td>${r.days}</td><td class="text-right font-mono">${r.total_hours.toFixed(2).replace('.',',')}</td>
+      <td class="text-right font-mono">${r.gross_amount.toFixed(2).replace('.',',')} €</td>
+      <td class="text-right"><input class="caf-input" type="number" step="0.5" min="0" value="${r.caf_subsidy > 0 ? r.caf_subsidy : ''}" onchange="onCafChange('${escAttr(r.family_name)}', this.value)" placeholder="0"></td>
+      <td class="text-right font-mono"><strong>${r.net_amount.toFixed(2).replace('.',',')} €</strong></td></tr>`;
   }
-
   const s = v => v.toFixed(2).replace('.', ',');
-  html += `</tbody><tfoot style="font-weight:600;border-top:2px solid var(--text)"><tr>
-    <td><strong>Total</strong></td><td></td>
-    <td class="text-right font-mono">${s(totalHours)}</td>
-    <td class="text-right font-mono">${s(totalGross)} €</td>
-    <td class="text-right font-mono">${s(totalSubsidy)} €</td>
-    <td class="text-right font-mono">${s(totalNet)} €</td>
-  </tr></tfoot></table>`;
-
-  // Cards (mobile)
+  html += `</tbody><tfoot style="font-weight:600;border-top:2px solid var(--text)"><tr><td><strong>Total</strong></td><td></td>
+    <td class="text-right font-mono">${s(totalHours)}</td><td class="text-right font-mono">${s(totalGross)} €</td>
+    <td class="text-right font-mono">${s(totalSubsidy)} €</td><td class="text-right font-mono">${s(totalNet)} €</td></tr></tfoot></table>`;
   html += `<div class="card-list">`;
   for (const r of data) {
-    const hrs = r.total_hours.toFixed(2).replace('.', ',');
-    const gross = r.gross_amount.toFixed(2).replace('.', ',');
-    const net = r.net_amount.toFixed(2).replace('.', ',');
     html += `<div class="billing-card">
       <div style="font-size:16px;font-weight:600;margin-bottom:6px">${esc(r.family_name)}</div>
       <div class="bc-row"><span class="bc-label">Jours</span><span>${r.days}</span></div>
-      <div class="bc-row"><span class="bc-label">Heures</span><span class="bc-value">${hrs}</span></div>
-      <div class="bc-row"><span class="bc-label">Brut</span><span class="bc-value">${gross} €</span></div>
-      <div class="bc-row"><span class="bc-label">CAF</span>
-        <input class="caf-input" type="number" step="0.5" min="0"
-          value="${r.caf_subsidy > 0 ? r.caf_subsidy : ''}"
-          onchange="onCafChange('${escAttr(r.family_name)}', this.value)"
-          placeholder="0" style="border:1px solid var(--border)">
-      </div>
-      <hr class="bc-divider">
-      <div class="bc-row"><span class="bc-label">Net</span><span class="bc-value">${net} €</span></div>
-    </div>`;
+      <div class="bc-row"><span class="bc-label">Heures</span><span class="bc-value">${r.total_hours.toFixed(2).replace('.',',')}</span></div>
+      <div class="bc-row"><span class="bc-label">Brut</span><span class="bc-value">${r.gross_amount.toFixed(2).replace('.',',')} €</span></div>
+      <div class="bc-row"><span class="bc-label">CAF</span><input class="caf-input" type="number" step="0.5" min="0" value="${r.caf_subsidy > 0 ? r.caf_subsidy : ''}" onchange="onCafChange('${escAttr(r.family_name)}', this.value)" placeholder="0"></div>
+      <hr class="bc-divider"><div class="bc-row"><span class="bc-label">Net</span><span class="bc-value">${r.net_amount.toFixed(2).replace('.',',')} €</span></div></div>`;
   }
   html += `</div>`;
-
   content.innerHTML = html;
 }
 
@@ -550,63 +570,49 @@ function onCafChange(familyName, value) {
   _cafTimer = setTimeout(async () => {
     const monthLabel = `${MONTHS_FR[billingMonth - 1]} ${billingYear}`;
     await saveCafSubsidy(monthLabel, familyName, value);
-    await renderBillingContent();
-    showToast('Complément CAF mis à jour ✓');
+    await renderBillingContent(); showToast('CAF mis a jour ✓');
   }, 400);
 }
 
-// ====================== NAVIGATION ======================
-
+// ───── NAVIGATION ─────
 async function navigateTo(page) {
   currentPage = page;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.page === page));
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page));
-
   try {
     switch (page) {
+      case 'dashboard': await renderDashboardPage(); break;
       case 'families': await renderFamiliesPage(); break;
       case 'attendances': await renderAttendancesPage(); break;
       case 'billing': await renderBillingPage(); break;
+      case 'account': await renderAccountPage(); break;
     }
   } catch (err) {
-    document.getElementById('page-' + page).innerHTML =
-      `<div class="card"><p>Erreur de chargement: ${esc(err.message)}</p></div>`;
+    document.getElementById('page-' + page).innerHTML = `<div class="card"><p>Erreur: ${esc(err.message)}</p></div>`;
   }
 }
 
-// ====================== HELPERS ======================
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => navigateTo(tab.dataset.page));
+});
 
-function esc(s) {
-  if (!s) return '';
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// ───── HELPERS ─────
+function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
+function escAttr(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;') : ''; }
+function formatDateShort(s) { if (!s) return ''; const p = s.split('-'); return p.length === 3 ? `${p[2]}/${p[1]}` : s; }
+
+// ───── RENDER CURRENT PAGE ─────
+async function renderCurrentPage() {
+  if (currentPage) await navigateTo(currentPage);
 }
 
-function escAttr(s) {
-  if (!s) return '';
-  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
-
-function formatDateShort(s) {
-  if (!s) return '';
-  const p = s.split('-');
-  return p.length === 3 ? `${p[2]}/${p[1]}` : s;
-}
-
-// ====================== BOOTSTRAP ======================
-
+// ───── BOOTSTRAP ─────
 document.addEventListener('DOMContentLoaded', async () => {
-  // Check connectivity
   try {
     const res = await fetch('/api/families');
-    if (!res.ok) throw new Error('API indisponible');
-    document.getElementById('db-status').textContent = 'Connecté';
-  } catch (e) {
-    document.getElementById('db-status').textContent = 'Hors ligne (cache)';
-  }
-
-  document.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => navigateTo(tab.dataset.page));
-  });
-
-  navigateTo('families');
+    if (!res.ok) throw new Error('offline');
+    document.getElementById('db-status').textContent = 'Connecte';
+  } catch { document.getElementById('db-status').textContent = 'Hors ligne (cache)'; }
+  await checkAuth();
+  navigateTo('dashboard');
 });
