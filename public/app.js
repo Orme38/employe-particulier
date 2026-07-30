@@ -25,14 +25,14 @@ async function api(method, url, body) {
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const res = await fetch(url, opts);
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    if (data.upgrade) { showUpgradeModal(data.message || 'Limite atteinte'); }
-    throw new Error(data.error || `HTTP ${res.status}`);
+    const d = await res.json().catch(() => ({}));
+    if (d && d.upgrade) { showUpgradeModal(d.message || 'Limite atteinte'); }
+    throw new Error((d && d.error) || `HTTP ${res.status}`);
   }
   if (method === 'DELETE') return null;
-  const data = await res.json();
-  if (data.error && data.upgrade) { showUpgradeModal(data.message); }
-  return data;
+  const d = await res.json();
+  if (d && d.error && d.upgrade) { showUpgradeModal(d.message); }
+  return d;
 }
 
 let _loadingCounter = 0;
@@ -542,7 +542,11 @@ async function submitAttendance(e) {
     document.getElementById('att-departure').value = '17:00';
     document.getElementById('att-family-info').textContent = '';
     document.getElementById('att-preview').style.display = 'none';
-    showToast(`${result.family_name} — ${(result.total_hours||0).toFixed(2).replace('.',',')} h, ${(result.amount||0).toFixed(2).replace('.',',')} € ✓`);
+    if (result && result.family_name) {
+      showToast(`${result.family_name} — ${(result.total_hours||0).toFixed(2).replace('.',',')} h, ${(result.amount||0).toFixed(2).replace('.',',')} € ✓`);
+    } else {
+      showToast('Presence enregistree ✓');
+    }
     await renderAttendanceList();
   } catch (err) { showToast('Erreur: ' + err.message); }
   if (btn) { btn.disabled = false; btn.textContent = 'Enregistrer'; }
