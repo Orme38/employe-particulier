@@ -25,7 +25,11 @@
     "@capacitor/push-notifications": "^8.1.2",
     "@capacitor/splash-screen": "^8.0.2",
     "@capacitor/status-bar": "^8.0.3",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.4.2",
     "express": "^4.21.0",
-    "sql.js": "^1.11.0"
+    "jsonwebtoken": "^9.0.3",
+    "sql.js": "^1.11.0",
+    "stripe": "^22.4.0"
   }
 }
