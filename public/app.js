@@ -116,8 +116,17 @@ async function startProCheckout() {
   btn.textContent = 'Redirection...'; btn.disabled = true;
   try {
     const res = await api('POST', '/api/subscription/create-checkout');
-    if (res.url) window.location.href = res.url;
-    else showToast('Erreur: pas d\'URL de paiement');
+    if (!res.url) { showToast('Erreur: pas d\'URL de paiement'); btn.textContent = 'Passer en Pro'; btn.disabled = false; return; }
+    const { Browser } = Capacitor?.Plugins || {};
+    if (Browser && typeof Capacitor !== 'undefined') {
+      await Browser.open({ url: res.url });
+      Browser.addListener('browserFinished', () => {
+        checkAuth();
+        renderCurrentPage();
+      });
+    } else {
+      window.location.href = res.url;
+    }
   } catch (err) {
     showToast('Erreur: ' + err.message);
     btn.textContent = 'Passer en Pro'; btn.disabled = false;
