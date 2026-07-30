@@ -1,5 +1,7 @@
 'use strict';
 
+try { require('dotenv').config(); } catch {}
+
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
@@ -23,6 +25,11 @@ const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || '';
 const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || 'price_pro_monthly';
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 const APP_URL = process.env.APP_URL || 'http://localhost:3000';
+const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
+
+if (IS_PROD && JWT_SECRET === 'emp-particulier-secret-key-change-in-prod') {
+  console.warn('⚠️ JWT_SECRET est la valeur par defaut ! Definissez une variable d\'environnement JWT_SECRET.');
+}
 
 const stripe = STRIPE_SECRET_KEY ? stripeLib(STRIPE_SECRET_KEY) : null;
 
@@ -64,6 +71,20 @@ function qOne(sql, params) {
 
 function qRun(sql, params) {
   db.run(sql, params);
+}
+
+// ───── RATE LIMITER (auth endpoints) ─────
+const rateLimitStore = {};
+function rateLimit(key, maxAttempts, windowMs) {
+  const now = Date.now();
+  const entry = rateLimitStore[key];
+  if (!entry || now - entry.start > windowMs) {
+    rateLimitStore[key] = { start: now, count: 1 };
+    return true;
+  }
+  if (entry.count >= maxAttempts) return false;
+  entry.count++;
+  return true;
 }
 
 // ───── AUTH MIDDLEWARE ─────
@@ -232,12 +253,19 @@ app.post('/api/subscription/webhook', express.raw({ type: 'application/json' }),
   res.json({ received: true });
 });
 
+// ───── HEALTH CHECK ─────
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime(), db: !!db, stripe: !!stripe });
+});
+
 // ───── MIDDLEWARE ─────
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ───── AUTH ROUTES ─────
 app.post('/api/auth/register', async (req, res) => {
+  const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+  if (!rateLimit('reg:' + ip, 5, 60000)) return res.status(429).json({ error: 'Trop de tentatives. Reessayez dans une minute.' });
   try {
     const { email, password, name } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email et mot de passe requis' });
@@ -257,6 +285,8 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 app.post('/api/auth/login', async (req, res) => {
+  const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+  if (!rateLimit('login:' + ip, 10, 60000)) return res.status(429).json({ error: 'Trop de tentatives. Reessayez dans une minute.' });
   try {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email et mot de passe requis' });
@@ -339,35 +369,54 @@ app.post('/api/subscription/cancel', authMiddleware, async (req, res) => {
 
 // ───── DASHBOARD ─────
 app.get('/api/dashboard', (req, res) => {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const year = now.getFullYear();
-  const prefix = `${year}-${month}`;
+  try {
+    const now = new Date();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = now.getFullYear();
+    const prefix = `${year}-${month}`;
 
-  const summary = qOne(`SELECT
-    COUNT(DISTINCT a.family_name) as families_count,
-    COUNT(a.id) as days_count,
-    COALESCE(ROUND(SUM(a.total_hours), 2), 0) as total_hours,
-    COALESCE(ROUND(SUM(a.amount), 2), 0) as total_amount
-    FROM attendances a WHERE a.attendance_date LIKE ?`, [prefix + '%']) || { families_count: 0, days_count: 0, total_hours: 0, total_amount: 0 };
+    const summary = qOne(`SELECT
+      COUNT(DISTINCT a.family_name) as families_count,
+      COUNT(a.id) as days_count,
+      COALESCE(ROUND(SUM(a.total_hours), 2), 0) as total_hours,
+      COALESCE(ROUND(SUM(a.amount), 2), 0) as total_amount
+      FROM attendances a WHERE a.attendance_date LIKE ?`, [prefix + '%']) || { families_count: 0, days_count: 0, total_hours: 0, total_amount: 0 };
 
-  const totalAllTime = qOne(`SELECT
-    COUNT(DISTINCT a.family_name) as total_families,
-    COALESCE(ROUND(SUM(a.amount), 2), 0) as total_earned
-    FROM attendances a`) || { total_families: 0, total_earned: 0 };
+    const totalAllTime = qOne(`SELECT
+      COUNT(DISTINCT a.family_name) as total_families,
+      COALESCE(ROUND(SUM(a.amount), 2), 0) as total_earned
+      FROM attendances a`) || { total_families: 0, total_earned: 0 };
 
-  const recent = qAll("SELECT a.*, f.hourly_rate FROM attendances a LEFT JOIN families f ON a.family_id = f.id ORDER BY a.created_at DESC LIMIT 5");
+    const recent = qAll("SELECT a.*, f.hourly_rate FROM attendances a LEFT JOIN families f ON a.family_id = f.id ORDER BY a.created_at DESC LIMIT 5");
 
-  res.json({
-    month: MONTHS_FR[now.getMonth()],
-    year,
-    current_month: summary,
-    all_time: totalAllTime,
-    recent,
-  });
+    res.json({
+      month: MONTHS_FR[now.getMonth()],
+      year,
+      current_month: summary,
+      all_time: totalAllTime,
+      recent,
+    });
+  } catch (e) { res.status(500).json({ error: 'Erreur lors du chargement du tableau de bord' }); }
 });
 
 // ───── API ROUTES ─────
+// ───── DATA EXPORT ─────
+app.get('/api/export/csv', authMiddleware, (req, res) => {
+  try {
+    const rows = qAll(`SELECT a.attendance_date, a.family_name, a.service_type,
+      a.arrival_time, a.departure_time, a.total_hours, a.amount, f.hourly_rate
+      FROM attendances a LEFT JOIN families f ON a.family_id = f.id
+      WHERE a.user_id = ? ORDER BY a.attendance_date DESC`, [req.user.id]);
+    let csv = 'Date;Famille;Service;Arrivee;Depart;Heures;Taux/h;Montant\n';
+    for (const r of rows) {
+      csv += `${r.attendance_date};${r.family_name};${r.service_type||''};${r.arrival_time};${r.departure_time};${(r.total_hours||0).toFixed(2)};${(r.hourly_rate||0).toFixed(2)};${(r.amount||0).toFixed(2)}\n`;
+    }
+    res.setHeader('Content-Type', 'text/csv;charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment;filename=export.csv');
+    res.status(200).send('\ufeff' + csv);
+  } catch (e) { res.status(500).json({ error: 'Erreur export' }); }
+});
+
 app.get('/api/families', optionalAuth, (req, res) => {
   const s = req.query.search;
   let sql = "SELECT * FROM families";
@@ -386,136 +435,163 @@ app.get('/api/families', optionalAuth, (req, res) => {
 });
 
 app.post('/api/families', authMiddleware, (req, res) => {
-  const d = req.body;
-  const tier = getTier(req.user.id);
-  const count = qOne("SELECT COUNT(*) as c FROM families WHERE user_id = ?", [req.user.id])?.c || 0;
-  if (count >= tier.max_families) {
-    return res.status(403).json({ error: 'Limite gratuite atteinte', upgrade: true, message: `Limite de ${tier.max_families} employeurs atteinte. Passez en Pro pour illimite.` });
-  }
-  qRun("INSERT INTO families (user_id, family_name, service_type, hourly_rate, parent_email) VALUES (?, ?, ?, ?, ?)",
-    [req.user.id, d.family_name.trim(), d.service_type||'', parseFloat(d.hourly_rate)||0, d.parent_email||'']);
-  const r = qOne("SELECT * FROM families WHERE family_name = ?", [d.family_name.trim()]);
-  saveDb();
-  res.status(201).json(r);
-});
-
-app.put('/api/families/:id', (req, res) => {
-  const d = req.body;
-  qRun("UPDATE families SET family_name=?, service_type=?, hourly_rate=?, parent_email=?, updated_at=datetime('now') WHERE id=?",
-    [d.family_name.trim(), d.service_type||'', parseFloat(d.hourly_rate)||0, d.parent_email||'', req.params.id]);
-  const r = qOne("SELECT * FROM families WHERE id = ?", [req.params.id]);
-  saveDb();
-  r ? res.json(r) : res.status(404).json({ error: 'not found' });
-});
-
-app.delete('/api/families/:id', (req, res) => {
-  qRun("DELETE FROM attendances WHERE family_id = ?", [req.params.id]);
-  qRun("DELETE FROM families WHERE id = ?", [req.params.id]);
-  saveDb();
-  res.json({ ok: true });
-});
-
-app.get('/api/families/by-name/:name', (req, res) => {
-  const r = qOne("SELECT * FROM families WHERE family_name = ?", [req.params.name]);
-  res.json(r || null);
-});
-
-app.get('/api/attendances', optionalAuth, (req, res) => {
-  let sql = "SELECT a.*, f.hourly_rate FROM attendances a LEFT JOIN families f ON a.family_id = f.id WHERE 1=1";
-  const p = [];
-  if (req.user) {
-    sql += " AND (a.user_id = ? OR a.user_id IS NULL)";
-    p.push(req.user.id);
-  }
-  if (req.query.month && req.query.year) {
-    sql += " AND a.attendance_date LIKE ?";
-    p.push(`${req.query.year}-${String(req.query.month).padStart(2,'0')}%`);
-  }
-  if (req.query.family_name) { sql += " AND a.family_name = ?"; p.push(req.query.family_name); }
-  sql += " ORDER BY a.attendance_date DESC, a.arrival_time DESC";
-  if (req.query.limit) { sql += " LIMIT ?"; p.push(parseInt(req.query.limit)); }
-  res.json(qAll(sql, p));
-});
-
-app.post('/api/attendances', authMiddleware, (req, res) => {
-  const { attendance_date, family_name, arrival_time, departure_time } = req.body;
-  const name = family_name.trim();
-  let fam = qOne("SELECT * FROM families WHERE family_name = ?", [name]);
-  if (!fam) {
+  try {
+    const d = req.body;
+    if (!d.family_name || !d.family_name.trim()) return res.status(400).json({ error: 'Nom requis' });
     const tier = getTier(req.user.id);
     const count = qOne("SELECT COUNT(*) as c FROM families WHERE user_id = ?", [req.user.id])?.c || 0;
     if (count >= tier.max_families) {
-      return res.status(403).json({ error: 'Limite gratuite atteinte', upgrade: true });
+      return res.status(403).json({ error: 'Limite gratuite atteinte', upgrade: true, message: `Limite de ${tier.max_families} employeurs atteinte. Passez en Pro pour illimite.` });
     }
-    qRun("INSERT INTO families (user_id, family_name, hourly_rate) VALUES (?, ?, 0)", [req.user.id, name]);
-    fam = qOne("SELECT * FROM families WHERE family_name = ?", [name]);
-  }
-  const tier = getTier(req.user.id);
-  const monthPrefix = attendance_date.slice(0, 7);
-  const monthCount = qOne("SELECT COUNT(*) as c FROM attendances WHERE user_id = ? AND attendance_date LIKE ?", [req.user.id, monthPrefix + '%'])?.c || 0;
-  if (monthCount >= tier.max_attendances_per_month) {
-    return res.status(403).json({ error: 'Limite gratuite atteinte', upgrade: true, message: `Limite de ${tier.max_attendances_per_month} presences/mois atteinte. Passez en Pro.` });
-  }
-  const hrs = calcHours(arrival_time, departure_time);
-  const amt = Math.round(hrs * (fam.hourly_rate || 0) * 100) / 100;
-  qRun("INSERT INTO attendances (user_id, attendance_date, family_id, family_name, arrival_time, departure_time, total_hours, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    [req.user.id, attendance_date, fam.id, fam.family_name, arrival_time, departure_time, hrs, amt]);
-  saveDb();
-  const r = qOne("SELECT * FROM attendances WHERE id = last_insert_rowid()");
-  res.status(201).json(r);
+    qRun("INSERT INTO families (user_id, family_name, service_type, hourly_rate, parent_email) VALUES (?, ?, ?, ?, ?)",
+      [req.user.id, d.family_name.trim(), d.service_type||'', Math.max(0, parseFloat(d.hourly_rate)||0), d.parent_email||'']);
+    const r = qOne("SELECT * FROM families WHERE family_name = ?", [d.family_name.trim()]);
+    saveDb();
+    res.status(201).json(r);
+  } catch (e) { res.status(500).json({ error: 'Erreur lors de la creation' }); }
+});
+
+app.put('/api/families/:id', (req, res) => {
+  try {
+    const d = req.body;
+    if (!d.family_name || !d.family_name.trim()) return res.status(400).json({ error: 'Nom requis' });
+    qRun("UPDATE families SET family_name=?, service_type=?, hourly_rate=?, parent_email=?, updated_at=datetime('now') WHERE id=?",
+      [d.family_name.trim(), d.service_type||'', Math.max(0, parseFloat(d.hourly_rate)||0), d.parent_email||'', req.params.id]);
+    const r = qOne("SELECT * FROM families WHERE id = ?", [req.params.id]);
+    saveDb();
+    r ? res.json(r) : res.status(404).json({ error: 'not found' });
+  } catch (e) { res.status(500).json({ error: 'Erreur lors de la mise a jour' }); }
+});
+
+app.delete('/api/families/:id', (req, res) => {
+  try {
+    qRun("DELETE FROM attendances WHERE family_id = ?", [req.params.id]);
+    qRun("DELETE FROM families WHERE id = ?", [req.params.id]);
+    saveDb();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'Erreur lors de la suppression' }); }
+});
+
+app.get('/api/families/by-name/:name', (req, res) => {
+  try {
+    const r = qOne("SELECT * FROM families WHERE family_name = ?", [req.params.name]);
+    res.json(r || null);
+  } catch (e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+app.get('/api/attendances', optionalAuth, (req, res) => {
+  try {
+    let sql = "SELECT a.*, f.hourly_rate FROM attendances a LEFT JOIN families f ON a.family_id = f.id WHERE 1=1";
+    const p = [];
+    if (req.user) {
+      sql += " AND (a.user_id = ? OR a.user_id IS NULL)";
+      p.push(req.user.id);
+    }
+    if (req.query.month && req.query.year) {
+      sql += " AND a.attendance_date LIKE ?";
+      p.push(`${req.query.year}-${String(req.query.month).padStart(2,'0')}%`);
+    }
+    if (req.query.family_name) { sql += " AND a.family_name = ?"; p.push(req.query.family_name); }
+    sql += " ORDER BY a.attendance_date DESC, a.arrival_time DESC";
+    if (req.query.limit) { sql += " LIMIT ?"; p.push(parseInt(req.query.limit)); }
+    res.json(qAll(sql, p));
+  } catch (e) { res.status(500).json({ error: 'Erreur lors du chargement' }); }
+});
+
+app.post('/api/attendances', authMiddleware, (req, res) => {
+  try {
+    const { attendance_date, family_name, arrival_time, departure_time } = req.body;
+    if (!family_name || !family_name.trim()) return res.status(400).json({ error: 'Nom de famille requis' });
+    if (!attendance_date) return res.status(400).json({ error: 'Date requise' });
+    if (!arrival_time || !departure_time) return res.status(400).json({ error: 'Horaires requis' });
+    const name = family_name.trim();
+    let fam = qOne("SELECT * FROM families WHERE family_name = ?", [name]);
+    if (!fam) {
+      const tier = getTier(req.user.id);
+      const count = qOne("SELECT COUNT(*) as c FROM families WHERE user_id = ?", [req.user.id])?.c || 0;
+      if (count >= tier.max_families) {
+        return res.status(403).json({ error: 'Limite gratuite atteinte', upgrade: true });
+      }
+      qRun("INSERT INTO families (user_id, family_name, hourly_rate) VALUES (?, ?, 0)", [req.user.id, name]);
+      fam = qOne("SELECT * FROM families WHERE family_name = ?", [name]);
+    }
+    const tier = getTier(req.user.id);
+    const monthPrefix = attendance_date.slice(0, 7);
+    const monthCount = qOne("SELECT COUNT(*) as c FROM attendances WHERE user_id = ? AND attendance_date LIKE ?", [req.user.id, monthPrefix + '%'])?.c || 0;
+    if (monthCount >= tier.max_attendances_per_month) {
+      return res.status(403).json({ error: 'Limite gratuite atteinte', upgrade: true, message: `Limite de ${tier.max_attendances_per_month} presences/mois atteinte. Passez en Pro.` });
+    }
+    const hrs = calcHours(arrival_time, departure_time);
+    const amt = Math.round(hrs * (fam.hourly_rate || 0) * 100) / 100;
+    qRun("INSERT INTO attendances (user_id, attendance_date, family_id, family_name, arrival_time, departure_time, total_hours, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [req.user.id, attendance_date, fam.id, fam.family_name, arrival_time, departure_time, hrs, amt]);
+    saveDb();
+    const r = qOne("SELECT * FROM attendances WHERE id = last_insert_rowid()");
+    res.status(201).json(r);
+  } catch (e) { res.status(500).json({ error: 'Erreur lors de l\'enregistrement' }); }
 });
 
 app.delete('/api/attendances/:id', (req, res) => {
-  qRun("DELETE FROM attendances WHERE id = ?", [req.params.id]);
-  saveDb();
-  res.json({ ok: true });
+  try {
+    qRun("DELETE FROM attendances WHERE id = ?", [req.params.id]);
+    saveDb();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'Erreur lors de la suppression' }); }
 });
 
 app.get('/api/billing', (req, res) => {
-  const month = parseInt(req.query.month);
-  const year = parseInt(req.query.year);
-  const prefix = `${year}-${String(month).padStart(2,'0')}`;
+  try {
+    const month = parseInt(req.query.month);
+    const year = parseInt(req.query.year);
+    if (!month || !year || month < 1 || month > 12) return res.status(400).json({ error: 'Mois et annee requis' });
+    const prefix = `${year}-${String(month).padStart(2,'0')}`;
 
-  const rows = qAll(`SELECT a.family_name, COUNT(a.id) as days,
-    ROUND(SUM(a.total_hours),2) as total_hours,
-    ROUND(SUM(a.amount),2) as gross_amount
-    FROM attendances a WHERE a.attendance_date LIKE ?
-    GROUP BY a.family_name ORDER BY a.family_name`, [prefix + '%']);
+    const rows = qAll(`SELECT a.family_name, COUNT(a.id) as days,
+      ROUND(SUM(a.total_hours),2) as total_hours,
+      ROUND(SUM(a.amount),2) as gross_amount
+      FROM attendances a WHERE a.attendance_date LIKE ?
+      GROUP BY a.family_name ORDER BY a.family_name`, [prefix + '%']);
 
-  const ml = billingMonthLabel(month, year);
-  const result = rows.map(r => {
-    const caf = qOne("SELECT * FROM caf_subsidies WHERE billing_month_label=? AND family_name=?", [ml, r.family_name]);
-    const s = caf ? caf.caf_subsidy : 0;
-    return {
-      family_name: r.family_name,
-      days: r.days,
-      total_hours: r.total_hours,
-      gross_amount: r.gross_amount,
-      caf_subsidy: s,
-      net_amount: Math.round((r.gross_amount - s) * 100) / 100
-    };
-  });
-  res.json(result);
+    const ml = billingMonthLabel(month, year);
+    const result = rows.map(r => {
+      const caf = qOne("SELECT * FROM caf_subsidies WHERE billing_month_label=? AND family_name=?", [ml, r.family_name]);
+      const s = caf ? caf.caf_subsidy : 0;
+      return {
+        family_name: r.family_name,
+        days: r.days,
+        total_hours: r.total_hours,
+        gross_amount: r.gross_amount,
+        caf_subsidy: s,
+        net_amount: Math.round((r.gross_amount - s) * 100) / 100
+      };
+    });
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: 'Erreur lors du calcul' }); }
 });
 
 app.post('/api/billing/caf', (req, res) => {
-  const { billing_month_label, family_name, caf_subsidy } = req.body;
-  const val = parseFloat(caf_subsidy) || 0;
-  const existing = qOne("SELECT * FROM caf_subsidies WHERE billing_month_label=? AND family_name=?", [billing_month_label, family_name]);
-  if (existing) {
-    qRun("UPDATE caf_subsidies SET caf_subsidy=?, updated_at=datetime('now') WHERE id=?", [val, existing.id]);
-  } else {
-    qRun("INSERT INTO caf_subsidies (billing_month_label, family_name, caf_subsidy) VALUES (?, ?, ?)", [billing_month_label, family_name, val]);
-  }
-  saveDb();
-  res.json({ ok: true });
+  try {
+    const { billing_month_label, family_name, caf_subsidy } = req.body;
+    if (!billing_month_label || !family_name) return res.status(400).json({ error: 'Champs requis' });
+    const val = Math.max(0, parseFloat(caf_subsidy) || 0);
+    const existing = qOne("SELECT * FROM caf_subsidies WHERE billing_month_label=? AND family_name=?", [billing_month_label, family_name]);
+    if (existing) {
+      qRun("UPDATE caf_subsidies SET caf_subsidy=?, updated_at=datetime('now') WHERE id=?", [val, existing.id]);
+    } else {
+      qRun("INSERT INTO caf_subsidies (billing_month_label, family_name, caf_subsidy) VALUES (?, ?, ?)", [billing_month_label, family_name, val]);
+    }
+    saveDb();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'Erreur' }); }
 });
 
 app.post('/api/settings/dark-mode', authMiddleware, (req, res) => {
-  qRun("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-    [`dark_mode_${req.user.id}`, req.body.dark ? '1' : '0']);
-  saveDb();
-  res.json({ ok: true });
+  try {
+    qRun("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+      [`dark_mode_${req.user.id}`, req.body.dark ? '1' : '0']);
+    saveDb();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'Erreur' }); }
 });
 
 app.get('*', (req, res) => {
