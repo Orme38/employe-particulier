@@ -310,7 +310,6 @@ app.post('/api/subscription/create-checkout', authMiddleware, async (req, res) =
   try {
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
-      payment_method_types: ['card'],
       line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
       metadata: { user_id: String(req.user.id) },
       client_reference_id: String(req.user.id),
