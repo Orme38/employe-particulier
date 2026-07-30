@@ -527,9 +527,10 @@ app.post('/api/attendances', authMiddleware, (req, res) => {
     const amt = Math.round(hrs * (fam.hourly_rate || 0) * 100) / 100;
     qRun("INSERT INTO attendances (user_id, attendance_date, family_id, family_name, arrival_time, departure_time, total_hours, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       [req.user.id, attendance_date, fam.id, fam.family_name, arrival_time, departure_time, hrs, amt]);
+    const insertedId = qOne("SELECT last_insert_rowid() as id");
     saveDb();
-    const r = qOne("SELECT * FROM attendances WHERE id = last_insert_rowid()");
-    res.status(201).json(r);
+    const r = insertedId ? qOne("SELECT * FROM attendances WHERE id = ?", [insertedId.id]) : null;
+    res.status(201).json(r || req.body);
   } catch (e) { res.status(500).json({ error: 'Erreur lors de l\'enregistrement' }); }
 });
 
