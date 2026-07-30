@@ -35,6 +35,23 @@ async function api(method, url, body) {
   return data;
 }
 
+let _loadingCounter = 0;
+function showLoading(msg) {
+  const el = document.getElementById('toast');
+  _loadingCounter++;
+  el.textContent = msg || 'Chargement...';
+  el.classList.add('show', 'loading');
+  clearTimeout(el._timer);
+}
+function hideLoading() {
+  _loadingCounter--;
+  if (_loadingCounter <= 0) {
+    _loadingCounter = 0;
+    const el = document.getElementById('toast');
+    el.classList.remove('show', 'loading');
+  }
+}
+
 function showToast(msg, duration) {
   const el = document.getElementById('toast');
   el.textContent = msg;
@@ -231,6 +248,7 @@ async function renderAccountPage() {
       `}
     </div>
     <div class="card">
+      <button class="btn btn-outline btn-block" onclick="exportData()" style="margin-bottom:8px">📥 Exporter les donnees (CSV)</button>
       <button class="btn btn-outline btn-block" onclick="logout()" style="color:var(--danger);border-color:var(--danger)">Se deconnecter</button>
     </div>`;
 }
@@ -239,6 +257,22 @@ async function cancelSubscription() {
   if (!confirm('Voulez-vous vraiment resilier ?')) return;
   await api('POST', '/api/subscription/cancel');
   await checkAuth(); await renderAccountPage(); showToast('Abonnement resilie');
+}
+
+async function exportData() {
+  showLoading('Preparation du fichier...');
+  try {
+    const res = await fetch('/api/export/csv', { headers: { 'Authorization': `Bearer ${authToken}` } });
+    if (!res.ok) throw new Error('Erreur export');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `employe-particulier-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+    showToast('Exporte ✓');
+  } catch (e) { showToast('Erreur: ' + e.message); }
+  hideLoading();
 }
 
 // ───── FAMILY OPERATIONS ─────
@@ -348,10 +382,15 @@ async function renderDashboardPage() {
 async function renderFamiliesPage() {
   const families = await getFamilies();
   const el = document.getElementById('page-families');
+  let limitInfo = '';
+  if (authToken && userSubscription?.tier !== 'pro') {
+    const count = families.length;
+    limitInfo = `<div class="limit-info ${count >= 2 ? 'limit-warn' : ''}">${count}/2 employeurs utilises <span class="text-muted">(gratuit)</span>${count >= 2 ? ' · <a href="#" onclick="showProInfo();return false">Passez en Pro</a>' : ''}</div>`;
+  }
   let html = `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <h2 style="margin:0">Employeurs</h2>
-      ${authToken ? '<button class="btn btn-primary btn-sm" onclick="showFamilyForm()">+ Ajouter</button>' : ''}
+      <div style="display:flex;gap:8px;align-items:center">${limitInfo}${authToken ? '<button class="btn btn-primary btn-sm" onclick="showFamilyForm()">+ Ajouter</button>' : ''}</div>
     </div>`;
   if (families.length === 0) { html += `<div class="empty-state"><p>Aucun employeur</p></div>`; }
   else {
@@ -424,7 +463,11 @@ async function renderAttendancesPage() {
   const el = document.getElementById('page-attendances');
   let html = '';
   if (authToken) {
-    html += `<div class="card"><h2>Nouvelle presence</h2>
+    let limitInfo = '';
+    if (userSubscription?.tier !== 'pro') {
+      limitInfo = `<div class="limit-info limit-warn" style="margin-bottom:12px">10 presences/mois max <span class="text-muted">(gratuit)</span> · <a href="#" onclick="showProInfo();return false">Passez en Pro</a></div>`;
+    }
+    html += `<div class="card"><h2>Nouvelle presence</h2>${limitInfo}
       <form id="attendance-form" onsubmit="return submitAttendance(event)">
         <div class="form-group"><label>Date</label><input type="date" name="attendance_date" value="${today}" required></div>
         <div class="form-group"><label>Nom de famille</label><input type="text" name="family_name" id="att-family-name" required placeholder="Tapez un nom" autocomplete="off" oninput="onFamilyNameInput(this.value)">
@@ -481,8 +524,11 @@ async function submitAttendance(e) {
   const fd = new FormData(e.target);
   const data = Object.fromEntries(fd.entries());
   if (!data.family_name.trim()) { showToast('Entrez un nom'); return false; }
+  const btn = e.target.querySelector('button[type="submit"]');
+  btn.disabled = true; btn.textContent = 'Enregistrement...';
   try {
     const result = await saveAttendance(data);
+    btn.disabled = false; btn.textContent = 'Enregistrer';
     e.target.reset(); document.getElementById('att-arrival').value = '08:00';
     document.getElementById('att-departure').value = '17:00';
     document.getElementById('att-family-info').textContent = '';
@@ -490,6 +536,7 @@ async function submitAttendance(e) {
     showToast(`${result.family_name} — ${(result.total_hours||0).toFixed(2).replace('.',',')} h, ${(result.amount||0).toFixed(2).replace('.',',')} € ✓`);
     await renderAttendanceList();
   } catch (err) { showToast('Erreur: ' + err.message); }
+  if (btn) { btn.disabled = false; btn.textContent = 'Enregistrer'; }
   return false;
 }
 
@@ -684,6 +731,41 @@ async function renderCurrentPage() {
   if (currentPage) await navigateTo(currentPage);
 }
 
+// ───── CAPACITOR INTEGRATION ─────
+async function initCapacitor() {
+  if (typeof Capacitor === 'undefined') return;
+  try {
+    const { SplashScreen } = Capacitor.Plugins;
+    if (SplashScreen) await SplashScreen.hide();
+  } catch {}
+  try {
+    const { StatusBar } = Capacitor.Plugins;
+    if (StatusBar) {
+      await StatusBar.setStyle({ style: isDark ? 'DARK' : 'LIGHT' });
+      await StatusBar.setBackgroundColor({ color: isDark ? '#1c1c1e' : '#ffffff' });
+    }
+  } catch {}
+  try {
+    const { Keyboard } = Capacitor.Plugins;
+    if (Keyboard) {
+      Keyboard.addListener('keyboardWillShow', () => {
+        document.getElementById('main-header').style.position = 'relative';
+      });
+      Keyboard.addListener('keyboardWillHide', () => {
+        document.getElementById('main-header').style.position = 'sticky';
+      });
+    }
+  } catch {}
+  try {
+    const { Network } = Capacitor.Plugins;
+    if (Network) {
+      Network.addListener('networkStatusChange', (s) => {
+        document.getElementById('db-status').textContent = s.connected ? 'Connecte' : 'Hors ligne';
+      });
+    }
+  } catch {}
+}
+
 // ───── BOOTSTRAP ─────
 document.addEventListener('DOMContentLoaded', async () => {
   try {
@@ -691,8 +773,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!res.ok) throw new Error('offline');
     document.getElementById('db-status').textContent = 'Connecte';
   } catch { document.getElementById('db-status').textContent = 'Hors ligne (cache)'; }
+  await initCapacitor();
   await checkAuth();
   await navigateTo('dashboard');
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('checkout') === 'success') {
+    showToast('Paiement reussi ! Bienvenue en Pro ✓');
+    window.history.replaceState({}, '', '/');
+    await checkAuth();
+    await renderCurrentPage();
+  }
   if (!localStorage.getItem('tutorial_done')) {
     setTimeout(showTutorial, 500);
   }
